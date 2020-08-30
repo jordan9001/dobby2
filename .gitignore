@@ -1,1 +1,10 @@
+__pycache__/
 *.sys
+*.i64
+*.exe
+*.swp
+*.nam
+*.til
+*.id0
+*.id1
+*.id2
