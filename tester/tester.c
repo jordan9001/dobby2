@@ -2,6 +2,8 @@
 #include <windows.h>
 #include <stdio.h>
 
+extern void test_asm(void);
+
 int main(int argc, char** argv)
 {
     (void)argv;
@@ -15,6 +17,7 @@ int main(int argc, char** argv)
     //TODO test complex memory access based off gs
     //TODO test memory access with no registers
     // shows up as immediate? if so, how to handle this case?
+    test_asm();    
 
     return 0;
 }

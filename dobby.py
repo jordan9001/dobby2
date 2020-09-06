@@ -7,6 +7,7 @@ import lief
 import sys
 import collections
 import struct
+import string
 from enum import Enum
 
 # ok so the plan
@@ -63,16 +64,19 @@ class HookRet(Enum):
     STOP_INS = 2
 
 class StepRet(Enum):
+    ERR_STACK_OOB = -3
     ERR_IP_OOB = -2
     ERR = -1
     OK = 0
     HOOK_EXEC = 1
     HOOK_WRITE = 2
     HOOK_READ = 3
-    PATH_FORKED = 4
-    BAD_INS = 5
-    DREF_SYMBOLIC = 6
-    DREF_OOB = 7
+    HOOK_CB = 4
+    PATH_FORKED = 5
+    STACK_FORKED = 6
+    BAD_INS = 7
+    DREF_SYMBOLIC = 8
+    DREF_OOB = 9
     
 
 class Dobby:
@@ -82,10 +86,13 @@ class Dobby:
         self.api = TritonContext(ARCH.X86_64)
         self.api.enableSymbolicEngine(True)
 
+        self.lasthook = None
+        self.lastins = None
+        self.stepcb = None
+
         # setup hook stuff
         # hooks are for stopping execution, or running handlers
         self.hooks = [[],[],[]] # e, rw, w
-        self.lasthook = None
 
         # setup annotation stuff
         # annotations are for noting things in memory that we track
@@ -108,29 +115,76 @@ class Dobby:
 
     def printReg(self, reg, simp=True):
         print(reg, end=" = ")
-        s = self.api.getSymbolicRegister(reg)
-        if s is not None:
-            ast = s.getAst()
+        if self.api.isRegisterSymbolized(reg):
+            s = self.api.getSymbolicRegister(reg)
+            if s is not None:
+                ast = s.getAst()
+                if simp:
+                    ast = self.api.simplify(ast, True)
+                #TODO print ast with HEX and optional tabbing of args
+                print(ast)
+                return
+        # concrete value
+        print(hex(self.api.getConcreteRegisterValue(reg)))
+
+    def printSymMem(self, addr, amt, stride, simp=True):
+        if not self.inBounds(addr, amt):
+            print("Warning, OOB memory")
+        for i in range(0, amt, stride):
+            memast = self.api.getMemoryAst(MemoryAccess(addr+i, stride))
             if simp:
-                ast = self.api.simplify(ast, True)
-            print(ast)
-        else:
-            # concrete value
-            print(hex(self.api.getConcreteRegisterValue(reg)))
+                memast = self.api.simplify(memast, True)
+            print(hex(addr+i)[2:].zfill(16), end=":  ")
+            #TODO print ast with HEX and optional tabbing of args
+            print(memast)
 
     def printMem(self, addr, amt, simp=True):
-        #TODO
-        pass
+        if not self.inBounds(addr, amt):
+            print("Warning, OOB memory")
+        # read symbolic memory too
+        hassym = False
+        for i in range(0, amt):
+            if self.api.isMemorySymbolized(MemoryAccess(addr+i, 1)):
+                hassym = True
+                break
+        if hassym:
+            print("Warning, contains symbolized memory")
+            self.printSymMem(addr, amt, 8, simp)
+            return
+        mem = self.api.getConcreteMemoryAreaValue(addr, amt)
+        hexdmp(mem, addr)
+
         
     def printRegMem(self, reg, amt, simp=True):
-        #TODO
-        pass
+        # dref register, if not symbolic and call printMem
+        if self.api.isRegisterSymbolized(reg):
+            print("Symbolic Register")
+            self.printReg(reg, simp)
+        else:
+            addr = self.api.getConcreteRegisterValue(reg)
+            self.printMem(addr, amt, simp)
+
+    def printStack(self, amt=0x60):
+        self.printRegMem(self.api.registers.rsp, amt)
 
     def getu64(self, addr):
         return struct.unpack("Q", self.api.getConcreteMemoryAreaValue(addr, 8))[0]
 
     def setu64(self, addr, val):
         self.api.setConcreteMemoryAreaValue(addr, struct.pack("Q", val))
+
+    def evalReg(self, reg):
+        #TODO is there a way to only evaluate if we have set the syms this reg depends on?
+        if self.api.isRegisterSymbolized(reg):
+            val = self.api.getSymbolicRegisterValue(reg)
+            self.api.setConcreteRegisterValue(reg, val)
+
+    def evalMem(self, addr, size):
+        #TODO is there a way to only evaluate if we have set the syms this area depends on?
+        mem = b""
+        for i in range(size):
+            mem += self.api.getSymbolicMemoryValue(MemoryAccess(addr+i, 1))
+            self.api.setConcreteMemoryValue(addr+i, mem)
 
     def loadPE(self, path, base):
         pe = lief.parse(path)
@@ -149,6 +203,12 @@ class Dobby:
             start = base + phdr.virtual_address
             end = start + len(phdr.content)
             self.api.setConcreteMemoryAreaValue(base + phdr.virtual_address, phdr.content)
+
+            if (end - start) < phdr.virtual_size:
+                end = start + phdr.virtual_size
+
+            # round end up to page size
+            end = (end + 0xfff) & (~0xfff)
             
             #annotate the memory region
             self.addAnn(start, end, "MAPPED_PE", True, pe.name + '(' + phdr.name + ')')
@@ -222,6 +282,7 @@ class Dobby:
         retaddr = ctx.getu64(sp)
         ctx.api.setConcreteRegisterValue(ctx.api.registers.rip, retaddr)
         ctx.api.setConcreteRegisterValue(ctx.api.registers.rax, 0)
+        ctx.api.setConcreteRegisterValue(ctx.api.registers.rsp, sp+8)
         return HookRet.DONE_INS
 
     def updateBounds(self, start, end):
@@ -354,21 +415,17 @@ class Dobby:
         self.api.disassembly(inst)
         return inst
 
-#class StepRet(Enum):
-#    ERR_IP_OOP = -2
-#    ERR = -1
-#    OK = 0
-#    HOOK_EXEC = 1
-#    HOOK_WRITE = 2
-#    HOOK_READ = 3
-#    PATH_FORKED = 4
-#    BAD_INS = 5
-#    DREF_SYMBOLIC = 6
-#    DREF_OOB = 7
-
     def stepi(self, ins, ignorehook=False):
+        if self.stepcb is not None:
+            ret = self.stepcb(self)
+            if ret == HookRet.STOP_INS:
+                return StepRet.HOOK_CB
+            if ret == HookRet.DONE_INS:
+                return StepRet.OK
+
         # do pre-step stuff
         self.lasthook = None
+        self.lastins = ins
 
         # rip and rsp should always be a concrete value at the beginning of this function
         rspreg = self.api.registers.rsp
@@ -376,8 +433,11 @@ class Dobby:
         rsp = self.api.getConcreteRegisterValue(rspreg)
         rip = self.api.getConcreteRegisterValue(ripreg)
 
-        if not self.inBounds(rip):
+        if not self.inBounds(rip, ins.getSize()):
             return StepRet.ERR_IP_OOB
+
+        if not self.inBounds(rsp, 8):
+            return StepRet.ERR_STACK_OOB
 
         if not ignorehook:
             # check if rip is at a hooked execution location
@@ -404,15 +464,19 @@ class Dobby:
         #   a hooked location (if not ignorehook)
         #   an out of bounds location
         # we can't know beforehand if it is a write or not, so verify after the instruction
+        #TODO how to automatically detect symbolic expressions that are evaluable based on variables we have set
         for o in ins.getOperands():
+            #TODO check if non-register memory derefs are MemoryAccess as well
             if isinstance(o, self.type_MemoryAccess):
-                if ins.getDisassembly().find("lea") != -1:
+                lea = ins.getDisassembly().find("lea")
+                nop = ins.getDisassembly().find("nop")
+                if lea != -1 or nop != -1:
                     # get that fake crap out of here
                     continue
                 # check base register isn't symbolic
                 basereg = o.getBaseRegister()
                 baseregid = basereg.getId()
-                if baseregid != 0 and basereg.self.api.isRegisterSymbolized(basereg):
+                if baseregid != 0 and self.api.isRegisterSymbolized(basereg):
                     return StepRet.DREF_SYMBOLIC
 
                 # check index register isn't symbolic
@@ -471,10 +535,14 @@ class Dobby:
 
         # check if we forked rip
         if self.api.isRegisterSymbolized(ripreg):
-            return StepReg.PATH_FORKED
+            return StepRet.PATH_FORKED
+            # find what symbols it depends on
+            # and use setConcreteVariableValue to give a concrete value for the var
+            # then use getSymbolic*Value to evaluate the result
 
         # check if we forked rsp
-        #TODO
+        if self.api.isRegisterSymbolized(ripreg):
+            return StepRet.STACK_FORKED
 
         # follow up on the write hooks
         if ins.isMemoryWrite():
@@ -483,9 +551,11 @@ class Dobby:
 
         return StepRet.OK
 
-    def step(self, printIns=True, ignorehook=False):
+    def step(self, printIns=True, ignorehook=True):
         ins = self.getNextIns()
-        print(ins)
+        if printIns:
+            #TODO if in API hooks, print API hook instead
+            print(ins)
         return self.stepi(ins, ignorehook)
 
     def cont(self, printIns=True, ignoreFirst=True):
@@ -498,3 +568,37 @@ class Dobby:
             if ret != StepRet.OK:
                 return ret
 
+    def until(self, addr, printIns=True, ignoreFirst=True):
+        #TODO
+        pass
+
+# util
+def hexdmp(stuff, start=0):
+    printable = string.digits + string.ascii_letters + string.punctuation + ' '
+    rowlen = 0x10
+    mid = (rowlen//2)-1
+    for i in range(0, len(stuff), rowlen):
+        # start of line
+        print(hex(start + i)[2:].zfill(16), end=":  ")
+
+        # bytes
+        rowend = min(i+rowlen, len(stuff))
+        for ci in range(i, rowend):
+            print(stuff[ci:ci+1].hex(), end=(" " if ((ci & (rowlen-1)) != mid) else '-'))
+            
+        # padding
+        empty = rowlen - (rowend - i)
+        if empty != 0:
+            # pad out
+            print("   " * empty, end="")
+
+        print(' ', end="")
+
+        # ascii
+        for c in stuff[i:rowend]:
+            cs = chr(c)
+            if cs in printable:
+                print(cs, end="")
+            else:
+                print(".", end="")
+        print()
