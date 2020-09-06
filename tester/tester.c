@@ -7,6 +7,7 @@ int main(int argc, char** argv)
     (void)argv;
     if (argc > 1) {
         printf("PID = %ld\n", GetCurrentProcessId());
+        printf("argv1 = %s\n", argv[1]);
     }
     printf("GLE = %ld\n", GetLastError());
 

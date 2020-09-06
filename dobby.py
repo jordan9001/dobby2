@@ -1,11 +1,13 @@
 if __name__ == '__main__':
     print("Please import this file from the interpreter")
+    exit(-1)
 
 from triton import *
 import lief
 import sys
 import collections
 import struct
+from enum import Enum
 
 # ok so the plan
 # instead of making our own cmdline interface, just use the python interpreter or ipython
@@ -55,8 +57,26 @@ class Annotation:
     def __repr__(self):
         return f"{hex(self.start)}-{hex(self.end)}=>\"{self.mtype}:{self.label}\""
 
+class HookRet(Enum):
+    CONT_INS = 0
+    DONE_INS = 1
+    STOP_INS = 2
+
+class StepRet(Enum):
+    ERR_IP_OOB = -2
+    ERR = -1
+    OK = 0
+    HOOK_EXEC = 1
+    HOOK_WRITE = 2
+    HOOK_READ = 3
+    PATH_FORKED = 4
+    BAD_INS = 5
+    DREF_SYMBOLIC = 6
+    
+
 class Dobby:
     def __init__(self, apihookarea=0xffff414100000000):
+        print("Starting Dobby 🤘")
         
         self.api = TritonContext(ARCH.X86_64)
         self.api.enableSymbolicEngine(True)
@@ -64,6 +84,7 @@ class Dobby:
         # setup hook stuff
         # hooks are for stopping execution, or running handlers
         self.hooks = [[],[],[]] # e, rw, w
+        self.lasthook = None
 
         # setup annotation stuff
         # annotations are for noting things in memory that we track
@@ -91,6 +112,11 @@ class Dobby:
         else:
             # concrete value
             print(hex(self.api.getConcreteRegisterValue(reg)))
+
+    def printMem(self, addr, simp=True):
+        #TODO
+        pass
+        
 
     def getu64(self, addr):
         return struct.unpack("Q", self.api.getConcreteMemoryAreaValue(addr, 8))[0]
@@ -182,6 +208,14 @@ class Dobby:
         
         return h
 
+    def rethook(handler, ctx, addr, sz, op):
+        print("HOOK happened")
+        sp = ctx.api.getConcreteRegisterValue(ctx.api.registers.rsp)
+        retaddr = ctx.getu64(sp)
+        ctx.api.setConcreteRegisterValue(ctx.api.registers.rip, retaddr)
+        ctx.api.setConcreteRegisterValue(ctx.api.registers.rax, 0)
+        return HookRet.DONE_INS
+
     def updateBounds(self, start, end):
         insi = 0
         si = -1
@@ -224,7 +258,7 @@ class Dobby:
             while insi+1 < len(self.bounds) and self.bounds[insi+1][1] <= d[insi][1]:
                 del self.bounds[insi+1]
 
-    def inBounds(self, addr, sz):
+    def inBounds(self, addr, sz=1):
         #TODO binary search
         for b in self.bounds:
             if b[1] < (addr+sz):
@@ -269,7 +303,7 @@ class Dobby:
         stackstart = stackbase - (0x1000 * 16)
         stackann = self.addAnn(stackstart, stackbase, "STACK", True, "Inital Stack")
         # add guard hook
-        def stack_guard_hook(ctx, hk, addr, sz, op):
+        def stack_guard_hook(hk, ctx, addr, sz, op):
             # grow the stack, if we can
             nonlocal stackann
 
@@ -286,6 +320,7 @@ class Dobby:
             # move the hook
             hk.start = newstart - 0x1000
             hk.end = newstart
+            return False
 
         self.addHook(stackstart - (0x1000), stackstart, "w", stack_guard_hook, False, "Stack Guard")
 
@@ -303,23 +338,86 @@ class Dobby:
 
     def getNextIns(self):
         # rip should never be symbolic when this function is called
-        if self.api.isRegisterSymbolized(self.api.registesrs.rip):
+        if self.api.isRegisterSymbolized(self.api.registers.rip):
             raise ValueError("Tried to get instruction with symbolized rip")
         rip = self.api.getConcreteRegisterValue(self.api.registers.rip)
         insbytes = self.api.getConcreteMemoryAreaValue(rip, 15)
-        inst = Instruction(rip, insbytes, 15)
+        inst = Instruction(rip, insbytes)
         self.api.disassembly(inst)
         return inst
 
-    def stepi(self, ins):
+#class StepRet(Enum):
+#    ERR_IP_OOP = -2
+#    ERR = -1
+#    OK = 0
+#    HOOK_EXEC = 1
+#    HOOK_WRITE = 2
+#    HOOK_READ = 3
+#    PATH_FORKED = 4
+#    BAD_INS = 5
+#    DREF_SYMBOLIC = 6
+
+    def stepi(self, ins, ignorehook=False):
+        # do pre-step stuff
+        self.lasthook = None
+
+        # rip and rsp should always be a concrete value at the beginning of this function
+        rspreg = self.api.registers.rsp
+        ripreg = self.api.registers.rip
+        rsp = self.api.getConcreteRegisterValue(rspreg)
+        rip = self.api.getConcreteRegisterValue(ripreg)
+
+        if not self.inBounds(rip):
+            return StepRet.ERR_IP_OOB
+
+        if not ignorehook:
+            # check if rip is at a hooked execution location
+            for eh in self.hooks[0]:
+                if eh.start <= rip < eh.end:
+                    # hooked
+                    self.lasthook = eh
+
+                    stop = True
+                    if eh.handler is not None:
+                        hret = eh.handler(self, rip, 1, "e")
+                        if hret == STOP_INS:
+                            return StepRet.HOOK_EXEC
+                        elif hret == CONT_INS:
+                            break
+                        elif hret == DONE_INS:
+                            return StepRet.OK
+
+                    else:
+                        return StepRet.HOOK_EXEC
+
+            # check if we are about to do a memory deref of a symbolic value or a hooked location
+            # we can't know beforehand if it is a write or not, so verify after the instruction
+            #TODO
+
+        # actually do a step
+        if not self.api.processing(ins):
+            return StepRet.BAD_INS
+
+        # check if we forked rip
+        if self.api.isRegisterSymbolized(ripreg):
+            return StepReg.PATH_FORKED
+
+        # check if we forked rsp
         #TODO
-        pass
 
-    def step(self, printIns=True):
-        ins = getNextIns(self)
-        return stepi(self, ins)
+        # follow up on the write hooks
+        #TODO
 
-    def cont(self):
-        pass
+        return StepRet.OK
 
+    def step(self, printIns=True, ignorehook=False):
+        ins = self.getNextIns()
+        print(ins)
+        return self.stepi(ins, ignorehook)
+
+    def cont(self, printIns=True):
+        while True:
+            ret = self.step(printIns)
+            if ret != StepRet.OK:
+                return ret
 
