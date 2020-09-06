@@ -72,6 +72,7 @@ class StepRet(Enum):
     PATH_FORKED = 4
     BAD_INS = 5
     DREF_SYMBOLIC = 6
+    DREF_OOB = 7
     
 
 class Dobby:
@@ -94,6 +95,10 @@ class Dobby:
         # bounds is for sandboxing areas we haven't setup yet
         self.bounds = []
 
+        # save off types for checking later
+        self.type_MemoryAccess = type(MemoryAccess(0,1))
+        self.type_Register = type(self.api.registers.rax)
+
         # add annotation for the API_FUNC area
         self.apihooks = self.addAnn(apihookarea, apihookarea, "API_HOOKS", False, "API HOOKS")
 
@@ -113,10 +118,13 @@ class Dobby:
             # concrete value
             print(hex(self.api.getConcreteRegisterValue(reg)))
 
-    def printMem(self, addr, simp=True):
+    def printMem(self, addr, amt, simp=True):
         #TODO
         pass
         
+    def printRegMem(self, reg, amt, simp=True):
+        #TODO
+        pass
 
     def getu64(self, addr):
         return struct.unpack("Q", self.api.getConcreteMemoryAreaValue(addr, 8))[0]
@@ -208,8 +216,8 @@ class Dobby:
         
         return h
 
-    def rethook(handler, ctx, addr, sz, op):
-        print("HOOK happened")
+    @staticmethod
+    def rethook(hook, ctx, addr, sz, op):
         sp = ctx.api.getConcreteRegisterValue(ctx.api.registers.rsp)
         retaddr = ctx.getu64(sp)
         ctx.api.setConcreteRegisterValue(ctx.api.registers.rip, retaddr)
@@ -356,6 +364,7 @@ class Dobby:
 #    PATH_FORKED = 4
 #    BAD_INS = 5
 #    DREF_SYMBOLIC = 6
+#    DREF_OOB = 7
 
     def stepi(self, ins, ignorehook=False):
         # do pre-step stuff
@@ -377,22 +386,84 @@ class Dobby:
                     # hooked
                     self.lasthook = eh
 
-                    stop = True
                     if eh.handler is not None:
-                        hret = eh.handler(self, rip, 1, "e")
-                        if hret == STOP_INS:
+                        hret = eh.handler(eh, self, rip, 1, "e")
+                        if hret == HookRet.STOP_INS:
                             return StepRet.HOOK_EXEC
-                        elif hret == CONT_INS:
+                        elif hret == HookRet.CONT_INS:
                             break
-                        elif hret == DONE_INS:
+                        elif hret == HookRet.DONE_INS:
                             return StepRet.OK
-
+                        else:
+                            raise TypeError(f"Unknown return from hook handler for hook {eh}")
                     else:
                         return StepRet.HOOK_EXEC
 
-            # check if we are about to do a memory deref of a symbolic value or a hooked location
-            # we can't know beforehand if it is a write or not, so verify after the instruction
-            #TODO
+        # check if we are about to do a memory deref of:
+        #   a symbolic value
+        #   a hooked location (if not ignorehook)
+        #   an out of bounds location
+        # we can't know beforehand if it is a write or not, so verify after the instruction
+        for o in ins.getOperands():
+            if isinstance(o, self.type_MemoryAccess):
+                if ins.getDisassembly().find("lea") != -1:
+                    # get that fake crap out of here
+                    continue
+                # check base register isn't symbolic
+                basereg = o.getBaseRegister()
+                baseregid = basereg.getId()
+                if baseregid != 0 and basereg.self.api.isRegisterSymbolized(basereg):
+                    return StepRet.DREF_SYMBOLIC
+
+                # check index register isn't symbolic
+                indexreg = o.getIndexRegister()
+                indexregid = indexreg.getId()
+                if indexregid != 0 and self.api.isRegisterSymbolized(indexreg):
+                    return StepRet.DREF_SYMBOLIC
+
+                # check segment isn't symbolic
+                segreg = o.getSegmentRegister()
+                segregis = segreg.getId()
+                if segreg.getId() != 0 and self.api.isRegisterSymbolized(segreg):
+                    return StepRet.DREF_SYMBOLIC
+
+                # calculate the address with displacement and scale
+                addr = 0
+                if baseregid != 0:
+                    addr += self.api.getConcreteRegisterValue(basereg)
+
+                if indexregid != 0:
+                    scale = o.getScale().getValue()
+                    addr += (scale * self.api.getConcreteRegisterValue(indexreg))
+
+                disp = o.getDisplacement().getValue()
+                addr += disp
+                size = o.getSize()
+
+                # check access is in bounds
+                if not self.inBounds(addr, size):
+                    return StepRet.DREF_OOB
+
+                if not ignorehook:
+                    # check if access is hooked
+                    for rh in self.hooks[1]:
+                        if rh.start <= addr < rh.end:
+                            # hooked
+                            self.lasthook = rh
+
+                            if rh.handler is not None:
+                                hret = rh.handler(eh, self, addr, size, "r")
+                                if hret == HookRet.STOP_INS:
+                                    return StepRet.HOOK_EXEC
+                                elif hret == HookRet.CONT_INS:
+                                    break
+                                elif hret == HookRet.DONE_INS:
+                                    return StepRet.OK
+                                else:
+                                    raise TypeError(f"Unknown return from hook handler for hook {rh}")
+                            else:
+                                return StepRet.HOOK_READ
+                    #TODO check write hooks
 
         # actually do a step
         if not self.api.processing(ins):
@@ -406,7 +477,9 @@ class Dobby:
         #TODO
 
         # follow up on the write hooks
-        #TODO
+        if ins.isMemoryWrite():
+            #TODO
+            pass
 
         return StepRet.OK
 
@@ -415,9 +488,13 @@ class Dobby:
         print(ins)
         return self.stepi(ins, ignorehook)
 
-    def cont(self, printIns=True):
+    def cont(self, printIns=True, ignoreFirst=True):
+        if ignoreFirst:
+            ret = self.step(printIns, True)
+            if ret != StepRet.OK:
+                return ret
         while True:
-            ret = self.step(printIns)
+            ret = self.step(printIns, False)
             if ret != StepRet.OK:
                 return ret
 

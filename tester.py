@@ -15,10 +15,17 @@ onexit = [x for x in ctx.hooks[0] if x.label.endswith("_onexit")]
 if len(onexit) != 1:
     print(f"expected one onexit hook, found {len(onexit)}")
     exit(-1)
-onexit[0].handler = ctx.rethook
+def onexitHook(hook, ctx, addr, sz, op):
+    print("_onexit Called, with argument:")
+    ctx.printReg(ctx.api.registers.rcx)
+    return ctx.rethook(hook, ctx, addr, sz, op)
+    
+onexit[0].handler = onexitHook
 
 # add a breakpoint
 ctx.addHook(0x401574, 0x401575, "e", None, False, "Breakpoint1")
+ctx.addHook(0x40166e, 0x40166f, "e", None, False, "Breakpoint2: check deref")
+ctx.addHook(0x401640, 0x401641, "e", None, False, "Breakpoint3: check stack ret")
 
 # setup argc argv
 ctx.api.symbolizeRegister(ctx.api.registers.rcx, "ARGC")
