@@ -29,16 +29,25 @@ r15 = ctx.api.registers.r15
 rip = ctx.api.registers.rip
 
 # add in predefined API hooks    
-onexit = [x for x in ctx.hooks[0] if x.label.endswith("_onexit")]
-if len(onexit) != 1:
-    print(f"expected one onexit hook, found {len(onexit)}")
-    exit(-1)
 def onexitHook(hook, ctx, addr, sz, op):
     print("_onexit Called, with argument:")
     ctx.printReg(rcx)
-    return ctx.rethook(hook, ctx, addr, sz, op)
+    return ctx.retzerohook(hook, ctx, addr, sz, op)
+
+def printfHook(hook, ctx, addr, sz, op):
+    fmtptr = ctx.api.getConcreteRegisterValue(rcx)
+    fmt = ctx.getCStr(fmtptr) 
+
+    print("Printf fmt: {str(fmt, 'ascii')}")
+
+    ctx.retzerohook(hook, ctx, addr, sz, op)
+
+    return HookRet.STOP_INS
     
-onexit[0].handler = onexitHook
+
+ctx.setApiHandler("_onexit", onexitHook)
+ctx.setApiHandler("GetCurrentProcessId", ctx.retzerohook)
+ctx.setApiHandler("printf", printfHook)
 
 # add a breakpoint
 ctx.addHook(0x401574, 0x401575, "e", None, False, "Breakpoint1: check symbolic cmp")
