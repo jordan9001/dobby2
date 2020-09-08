@@ -42,8 +42,7 @@ def printfHook(hook, ctx, addr, sz, op):
 
     ctx.retzerohook(hook, ctx, addr, sz, op)
 
-    return HookRet.STOP_INS
-    
+    return HookRet.STOP_INS    
 
 ctx.setApiHandler("_onexit", onexitHook)
 ctx.setApiHandler("GetCurrentProcessId", ctx.retzerohook)

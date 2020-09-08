@@ -385,8 +385,21 @@ class Dobby:
             combine = True
 
         if combine:
-            while insi+1 < len(self.bounds) and self.bounds[insi+1][1] <= d[insi][1]:
+            while insi+1 < len(self.bounds) and self.bounds[insi+1][1] <= self.bounds[insi][1]:
                 del self.bounds[insi+1]
+
+    def getFreeMem(self, start, amt):
+        #TODO binary search
+        
+        prev = start
+        for b in self.bounds:
+            if (prev+amt) <= b[0]:
+                # found spot
+                return (prev, prev+amt)
+            elif b[1] > prev:
+                prev = b[1]
+        return (prev, prev+amt)
+            
 
     def inBounds(self, addr, sz=1):
         #TODO binary search
@@ -404,9 +417,33 @@ class Dobby:
 
         ann = Annotation(start, end, mtype, label)
         self.ann.append(ann)
+        #TODO sort annotations
         return ann
 
-    def initState(self, start, end, stackbase=0xffffb9872000000, priv=0):
+    def alloc(self, amt, start=0xffff765400000000, label=""):
+        # get a free spot in bounds
+        (start, end) = self.getFreeMem(start, amt)
+        # if there is already an "ALLOC" annotation, extend it
+        allocann = None
+        for a in self.ann:
+            if a.end == start and a.mtype == "ALLOC":
+                allocann = a
+                allocann.end = end
+                if len(label) > 0:
+                    allocann.label += "and " + label
+                break;
+            #TODO join to trailing ALLOC as well?
+        if allocann is None:
+            allocann = Annotation(start, end, "ALLOC", label)
+            self.ann.append(allocann)
+            #TODO sort annotations
+
+        self.updateBounds(start, end)
+
+        print("DEBUG:", hex(start), hex(end))
+        return start
+
+    def initState(self, start, end, stackbase=0xffffb9872000000, priv=0, symbolizeControl=True):
         # zero or symbolize all registers
         for r in self.api.getAllRegisters():
             n = r.getName()
@@ -414,7 +451,7 @@ class Dobby:
             if n.startswith("cr") or n in ["gs", "fs"]:
                 sym = True
 
-            if sym:
+            if sym and symbolizeControl:
                 self.api.symbolizeRegister(r, "Inital " + n)
             else:
                 self.api.setConcreteRegisterValue(r, 0)
