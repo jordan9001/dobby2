@@ -193,3 +193,12 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op):
 def registerWinHooks(ctx):
     ctx.setApiHandler("RtlDuplicateUnicodeString", RtlDuplicateUnicodeString_hook, "ignore")
 
+
+def initSys(ctx):
+    registerWinHooks(ctx)
+
+    # setup KUSER_SHARED_DATA
+    #TODO
+
+    # setup KPCR and KPRCB
+    #TODO

@@ -1,5 +1,6 @@
 .intel_syntax noprefix
 .global test_asm
+.global get_realpid
 
 dat_1:
 .quad 0x4141414141414141, 0, 0, 0x4040404040404040
@@ -12,3 +13,13 @@ test_asm:
     mov rax, dat_1
 
     ret
+
+get_realpid:
+    
+    xor rax, rax
+    xor rcx, rcx
+    lea rax, gs:[rax + 0x850 + (rcx * 2)]
+    mov rax, [rax]
+    ret
+    
+    
