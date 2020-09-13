@@ -7,7 +7,7 @@ from dobby import *
 # load the PE
 ctx = Dobby(0x4141410000)
 pe = ctx.loadPE("./tester/tester.exe", 0x400000)
-ctx.initState(0x4013AF, 0x4013B4, 0x64f000, 3)
+ctx.initState(0x4013AF, 0x4013B4, 0, 3)
 
 # setup easy reg access
 rax = ctx.api.registers.rax
@@ -38,21 +38,34 @@ def printfHook(hook, ctx, addr, sz, op):
     fmtptr = ctx.api.getConcreteRegisterValue(rcx)
     fmt = ctx.getCStr(fmtptr) 
 
-    print("Printf fmt: {str(fmt, 'ascii')}")
+    print(f"Printf fmt: {str(fmt, 'ascii')}")
 
     ctx.retzerohook(hook, ctx, addr, sz, op)
 
-    return HookRet.STOP_INS    
+    return HookRet.STOP_INS
+
 
 ctx.setApiHandler("_onexit", onexitHook)
 ctx.setApiHandler("GetCurrentProcessId", ctx.retzerohook)
+ctx.setApiHandler("GetLastError", ctx.retzerohook)
 ctx.setApiHandler("printf", printfHook)
 
 # add a breakpoint
-ctx.addHook(0x401574, 0x401575, "e", None, False, "Breakpoint1: check symbolic cmp")
-ctx.addHook(0x401600, 0x401600, "e", None, False, "Breakpoint2: test_asm")
+ctx.addHook(0x40156f, 0x401570, "e", None, False, "Breakpoint: Check Stack before")
 
 # setup argc argv
-ctx.api.symbolizeRegister(rcx, "ARGC")
-ctx.api.symbolizeRegister(rdx, "ARGV")
+#ctx.api.symbolizeRegister(rcx, "ARGC")
+#ctx.api.symbolizeRegister(rdx, "ARGV")
+ctx.api.setConcreteRegisterValue(rcx, 2)
+argv0 = b"tester.exe\0"
+argv1 = b"AAAA\0"
+argv = ctx.alloc((8*3) + len(argv0) + len(argv1))
+ctx.setu64(argv, argv + 0x18)
+ctx.setu64(argv+8, argv + 0x18 + len(argv0))
+ctx.setu64(argv+0x10, 0)
+ctx.api.setConcreteMemoryAreaValue(argv + 0x18, argv0)
+ctx.api.setConcreteMemoryAreaValue(argv + 0x18 + len(argv0), argv1)
+ctx.api.setConcreteRegisterValue(rdx, argv)
+print("ARGV at", hex(argv))
+
 print("ctx prepped for tester.exe")

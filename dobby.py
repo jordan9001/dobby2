@@ -91,6 +91,7 @@ class Dobby:
         self.lasthook = None
         self.lastins = None
         self.stepcb = None
+        self.trace = None
 
         # id's of symbols we have set a value for
         self.defsyms = set()
@@ -132,6 +133,9 @@ class Dobby:
         # concrete value
         print(hex(self.api.getConcreteRegisterValue(reg)))
 
+    def ip(self):
+        self.printReg(self.api.registers.rip)
+
     def printSymMem(self, addr, amt, stride, simp=True):
         if not self.inBounds(addr, amt):
             print("Warning, OOB memory")
@@ -143,7 +147,7 @@ class Dobby:
             #TODO print ast with HEX and optional tabbing of args
             print(memast)
 
-    def printMem(self, addr, amt, simp=True):
+    def printMem(self, addr, amt=0x60, simp=True):
         if not self.inBounds(addr, amt):
             print("Warning, OOB memory")
         # read symbolic memory too
@@ -159,7 +163,7 @@ class Dobby:
         mem = self.api.getConcreteMemoryAreaValue(addr, amt)
         hexdmp(mem, addr)
 
-    def printRegMem(self, reg, amt, simp=True):
+    def printRegMem(self, reg, amt=0x60, simp=True):
         # dref register, if not symbolic and call printMem
         if self.api.isRegisterSymbolized(reg):
             print("Symbolic Register")
@@ -233,6 +237,8 @@ class Dobby:
 
     def loadPE(self, path, base):
         pe = lief.parse(path)
+        if pe is None:
+            raise FileNotFoundError(f"Unable to parse file {path}")
 
         dif = base - pe.optional_header.imagebase
 
@@ -320,19 +326,18 @@ class Dobby:
             self.updateBounds(start, end)
         
         return h
-
-    @staticmethod
-    def rethook(hook, ctx, addr, sz, op):
-        sp = ctx.api.getConcreteRegisterValue(ctx.api.registers.rsp)
-        retaddr = ctx.getu64(sp)
-        ctx.api.setConcreteRegisterValue(ctx.api.registers.rip, retaddr)
-        ctx.api.setConcreteRegisterValue(ctx.api.registers.rsp, sp+8)
-        return HookRet.DONE_INS
+    
+    def doRet(self, retval=0):
+        self.api.setConcreteRegisterValue(self.api.registers.rax, retval)
+        sp = self.api.getConcreteRegisterValue(self.api.registers.rsp)
+        retaddr = self.getu64(sp)
+        self.api.setConcreteRegisterValue(self.api.registers.rip, retaddr)
+        self.api.setConcreteRegisterValue(self.api.registers.rsp, sp+8)
 
     @staticmethod
     def retzerohook(hook, ctx, addr, sz, op):
-        ctx.api.setConcreteRegisterValue(ctx.api.registers.rax, 0)
-        return ctx.rethook(hook, ctx, addr, sz, op)
+        ctx.doRet()
+        return HookRet.DONE_INS
 
     def setApiHandler(self, name, handler, overwrite=False):
         found = [x for x in self.hooks[0] if x.label.endswith("::"+name)]
@@ -420,8 +425,10 @@ class Dobby:
         #TODO sort annotations
         return ann
 
-    def alloc(self, amt, start=0xffff765400000000, label=""):
-        # get a free spot in bounds
+    def alloc(self, amt, start=0, label=""):
+        if start == 0:
+            start = 0xffff765400000000 if self.priv else 0x660000
+
         (start, end) = self.getFreeMem(start, amt)
         # if there is already an "ALLOC" annotation, extend it
         allocann = None
@@ -439,11 +446,13 @@ class Dobby:
             #TODO sort annotations
 
         self.updateBounds(start, end)
-
-        print("DEBUG:", hex(start), hex(end))
         return start
 
-    def initState(self, start, end, stackbase=0xffffb9872000000, priv=0, symbolizeControl=True):
+    def initState(self, start, end, stackbase=0, priv=0, symbolizeControl=True):
+        self.priv = (priv == 0)
+        if stackbase == 0:
+            stackbase = 0xffffb9872000000 if self.priv else 0x64f000
+
         # zero or symbolize all registers
         for r in self.api.getAllRegisters():
             n = r.getName()
@@ -502,6 +511,15 @@ class Dobby:
         self.api.setConcreteRegisterValue(self.api.registers.rsp, stackbase - 0x100)
 
         return True
+
+    def startTrace(self):
+        if self.trace is None:
+            self.trace = []
+
+    def stopTrace(self):
+        t = self.trace
+        self.trace = None
+        return t
 
     def getNextIns(self):
         # rip should never be symbolic when this function is called
@@ -652,6 +670,9 @@ class Dobby:
         if not self.api.processing(ins):
             return StepRet.BAD_INS
 
+        if self.trace is not None:
+            self.trace.append(str(ins))
+
         # check if we forked rip
         if self.api.isRegisterSymbolized(ripreg):
             return StepRet.PATH_FORKED
@@ -665,6 +686,8 @@ class Dobby:
 
         # follow up on the write hooks
         if ins.isMemoryWrite():
+            #TODO
+            # also what if they wrote to a hooked location on the stack with a push?
             #TODO
             pass
 
@@ -688,8 +711,25 @@ class Dobby:
                 return ret
 
     def until(self, addr, printIns=True, ignoreFirst=True):
-        #TODO
-        pass
+        ret = StepRet.OK
+        if ignoreFirst:
+            ret = self.step(printIns, True)
+            if ret != StepRet.OK:
+                return ret
+
+        while True:
+            rip = self.api.getConcreteRegisterValue(ripreg)
+            if rip == addr:
+                break
+
+            ret = self.step(printIns, False)
+            if ret != StepRet.OK:
+                break
+
+        return ret
+        
+            
+        
 
 # util
 def hexdmp(stuff, start=0):
