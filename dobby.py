@@ -46,7 +46,7 @@ class Hook:
         self.handler = handler
 
     def __repr__(self):
-        return f"Hook @ {hex(self.start)}:\"{self.label}\""
+        return f"Hook @ {hex(self.start)}:\"{self.label}\"{' (no handler)' if self.handler is None else ''}"
 
 class Annotation:
     def __init__(self, start, end, mtype="UNK", label=""):
@@ -83,15 +83,17 @@ class StepRet(Enum):
 
 class Dobby:
     def __init__(self, apihookarea=0xffff414100000000):
-        print("Starting Dobby 🤘")
+        print("🤘 Starting Dobby 🤘")
         
         self.api = TritonContext(ARCH.X86_64)
         self.api.enableSymbolicEngine(True)
 
+        self.printIns = True
         self.lasthook = None
         self.lastins = None
         self.stepcb = None
         self.trace = None
+        self.priv = True
 
         # id's of symbols we have set a value for
         self.defsyms = set()
@@ -175,11 +177,59 @@ class Dobby:
     def printStack(self, amt=0x60):
         self.printRegMem(self.api.registers.rsp, amt)
 
+    def getfmt(self, addr, fmt, sz):
+        return struct.unpack(fmt, self.api.getConcreteMemoryAreaValue(addr, sz))[0]
+
     def getu64(self, addr):
-        return struct.unpack("Q", self.api.getConcreteMemoryAreaValue(addr, 8))[0]
+        return self.getfmt(addr, "<Q", 8)
+
+    def getu32(self, addr):
+        return self.getfmt(addr, "<I", 4)
+
+    def getu16(self, addr):
+        return self.getfmt(addr, "<H", 2)
+
+    def getu8(self, addr):
+        return self.getfmt(addr, "<B", 1)
+
+    def geti64(self, addr):
+        return self.getfmt(addr, "<q", 8)
+
+    def geti32(self, addr):
+        return self.getfmt(addr, "<i", 4)
+
+    def geti16(self, addr):
+        return self.getfmt(addr, "<h", 2)
+
+    def geti8(self, addr):
+        return self.getfmt(addr, "<b", 1)
+
+    def setfmt(self, addr, val, fmt):
+        self.api.setConcreteMemoryAreaValue(addr, struct.pack(fmt, val))
 
     def setu64(self, addr, val):
-        self.api.setConcreteMemoryAreaValue(addr, struct.pack("Q", val))
+        self.setfmt(addr, val, "<Q")
+
+    def setu32(self, addr, val):
+        self.setfmt(addr, val, "<I")
+
+    def setu16(self, addr, val):
+        self.setfmt(addr, val, "<H")
+
+    def setu8(self, addr, val):
+        self.setfmt(addr, val, "<B")
+
+    def seti64(self, addr, val):
+        self.setfmt(addr, val, "<q")
+
+    def seti32(self, addr, val):
+        self.setfmt(addr, val, "<i")
+
+    def seti16(self, addr, val):
+        self.setfmt(addr, val, "<h")
+
+    def seti8(self, addr, val):
+        self.setfmt(addr, val, "<b")
 
     def getCStr(self, addr):
         mem = bytearray()
@@ -266,7 +316,11 @@ class Dobby:
 
         # do reloactions
         for r in pe.relocations:
-             for re in pe.relocations:
+            lastabs = False
+            for re in r.entries:
+                if lastabs:
+                    # huh, it wasn't the last one?
+                    print(f"Warning, got a ABS relocation that wasn't the last one")
                 if re.type == lief.PE.RELOCATIONS_BASE_TYPES.DIR64:
                     a = re.address
                     val = self.getu64(base + a)
@@ -274,6 +328,10 @@ class Dobby:
                     slid = val + dif
 
                     self.setu64(base + a, slid)
+                elif re.type == lief.PE.RELOCATIONS_BASE_TYPES.ABSOLUTE:
+                    # last one is one of these as a stop point
+                    lastabs = True
+                    #TODO handle this anyways?
                 else:
                     print(f"Warning: PE Loading: Unhandled relocation type {re.type}")
 
@@ -326,6 +384,9 @@ class Dobby:
             self.updateBounds(start, end)
         
         return h
+
+    #TODO
+    # add a way to use read-only capabilities from a windows kernel debugger to apply real system info?
     
     def doRet(self, retval=0):
         self.api.setConcreteRegisterValue(self.api.registers.rax, retval)
@@ -345,8 +406,11 @@ class Dobby:
             raise KeyError(f"Found {len(found)} hooks that match that name, unable to set handler")
 
         hk = found[0]
-        if not overwrite and hk.handler is not None:
-            raise KeyError(f"Tried to set a handler for a API hook that already has a set handler")
+        if hk.handler is not None:
+            if overwrite == "ignore":
+                return
+            if not overwrite:
+                raise KeyError(f"Tried to set a handler for a API hook that already has a set handler")
 
         hk.handler = handler
         
@@ -421,13 +485,16 @@ class Dobby:
             self.updateBounds(start, end)
 
         ann = Annotation(start, end, mtype, label)
+        #TODO keep annotations sorted
         self.ann.append(ann)
-        #TODO sort annotations
         return ann
 
-    def alloc(self, amt, start=0, label=""):
+    def alloc(self, amt, start=0, label="", roundamt=True):
         if start == 0:
             start = 0xffff765400000000 if self.priv else 0x660000
+
+        # round amt up to 0x10 boundry
+        amt = (amt+0xf) & (~0xf)
 
         (start, end) = self.getFreeMem(start, amt)
         # if there is already an "ALLOC" annotation, extend it
@@ -443,7 +510,7 @@ class Dobby:
         if allocann is None:
             allocann = Annotation(start, end, "ALLOC", label)
             self.ann.append(allocann)
-            #TODO sort annotations
+            #TODO keep annotations sorted
 
         self.updateBounds(start, end)
         return start
@@ -451,7 +518,7 @@ class Dobby:
     def initState(self, start, end, stackbase=0, priv=0, symbolizeControl=True):
         self.priv = (priv == 0)
         if stackbase == 0:
-            stackbase = 0xffffb9872000000 if self.priv else 0x64f000
+            stackbase = 0xffffb98760000000 if self.priv else 0x64f000
 
         # zero or symbolize all registers
         for r in self.api.getAllRegisters():
@@ -693,27 +760,27 @@ class Dobby:
 
         return StepRet.OK
 
-    def step(self, printIns=True, ignorehook=True):
+    def step(self, ignorehook=True):
         ins = self.getNextIns()
-        if printIns:
+        if self.printIns:
             #TODO if in API hooks, print API hook instead
             print(ins)
         return self.stepi(ins, ignorehook)
 
-    def cont(self, printIns=True, ignoreFirst=True):
+    def cont(self, ignoreFirst=True):
         if ignoreFirst:
-            ret = self.step(printIns, True)
+            ret = self.step(True)
             if ret != StepRet.OK:
                 return ret
         while True:
-            ret = self.step(printIns, False)
+            ret = self.step(False)
             if ret != StepRet.OK:
                 return ret
 
-    def until(self, addr, printIns=True, ignoreFirst=True):
+    def until(self, addr, ignoreFirst=True):
         ret = StepRet.OK
         if ignoreFirst:
-            ret = self.step(printIns, True)
+            ret = self.step(True)
             if ret != StepRet.OK:
                 return ret
 
@@ -722,7 +789,7 @@ class Dobby:
             if rip == addr:
                 break
 
-            ret = self.step(printIns, False)
+            ret = self.step(False)
             if ret != StepRet.OK:
                 break
 
