@@ -63,6 +63,7 @@ class HookRet(Enum):
     CONT_INS = 0
     DONE_INS = 1
     STOP_INS = 2
+    FORCE_STOP_INS = 3 # unlike STOP_INS this one can not be ignored
 
 class StepRet(Enum):
     ERR_STACK_OOB = -3
@@ -94,6 +95,7 @@ class Dobby:
         self.stepcb = None
         self.trace = None
         self.priv = True
+        self.inscount = 0
 
         # id's of symbols we have set a value for
         self.defsyms = set()
@@ -400,6 +402,19 @@ class Dobby:
         ctx.doRet()
         return HookRet.DONE_INS
 
+    def addVolatileSymHook(name, addr, sz, op, stops=False):
+        if op != "r":
+            raise TypeError("addVolatileSymHook only works with read hooks")
+        
+        ma = MemoryAccess(addr, sz)
+        hit_count = 0
+        def vshook(hook, ctx, addr, sz, op):
+            nonlocal hit_count
+            # create a new symbol for every hit
+            ctx.api.symbolizeMemory(ma, name+hex(hit_count))
+            hit_count += 1
+            return HookRet.STOP_INS if stops else HookRet.CONT_INS
+
     def setApiHandler(self, name, handler, overwrite=False):
         found = [x for x in self.hooks[0] if x.label.endswith("::"+name)]
         if len(found) != 1:
@@ -603,9 +618,11 @@ class Dobby:
     def stepi(self, ins, ignorehook=False):
         if self.stepcb is not None:
             ret = self.stepcb(self)
-            if ret == HookRet.STOP_INS:
+            if ret == HookRet.FORCE_STOP_INS:
                 return StepRet.HOOK_CB
-            if ret == HookRet.DONE_INS:
+            elif ret == HookRet.STOP_INS and not ignorehook:
+                return StepRet.HOOK_CB
+            elif ret == HookRet.DONE_INS:
                 return StepRet.OK
 
         # do pre-step stuff
@@ -632,7 +649,9 @@ class Dobby:
 
                 if eh.handler is not None:
                     hret = eh.handler(eh, self, rip, 1, "e")
-                    if hret == HookRet.STOP_INS:
+                    if hret == HookRet.FORCE_STOP_INS:
+                        return StepRet.HOOK_EXEC
+                    elif hret == HookRet.STOP_INS:
                         if not ignorehook:
                             return StepRet.HOOK_EXEC
                         else:
@@ -712,7 +731,9 @@ class Dobby:
 
                         if rh.handler is not None:
                             hret = rh.handler(eh, self, addr, size, "r")
-                            if hret == HookRet.STOP_INS:
+                            if hret == HookRet.FORCE_STOP_INS:
+                                return StepRet.HOOK_EXEC
+                            elif hret == HookRet.STOP_INS:
                                 if not ignorehook:
                                     return StepRet.HOOK_READ
                                 else:
@@ -736,6 +757,8 @@ class Dobby:
         # actually do a step
         if not self.api.processing(ins):
             return StepRet.BAD_INS
+
+        self.inscount += 1
 
         if self.trace is not None:
             self.trace.append(str(ins))
