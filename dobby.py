@@ -94,8 +94,9 @@ class Dobby:
         self.lastins = None
         self.stepcb = None
         self.trace = None
-        self.priv = True
         self.inscount = 0
+        self.priv = True
+        self.pes = []
 
         # id's of symbols we have set a value for
         self.defsyms = set()
@@ -178,6 +179,38 @@ class Dobby:
 
     def printStack(self, amt=0x60):
         self.printRegMem(self.api.registers.rsp, amt)
+
+    def printMap(self):
+        mp = [ x for x in self.ann if (x.end - x.start) != 0 ]
+        mp.sort(key = lambda x: x.start)
+
+        # add bounds areas not covered by ann
+        for b in self.bounds:
+            covered = False
+            # if b is not contained by any annotation save it
+            s = b[0]
+            e = b[1]
+            for m in mp:
+                if m.end <= s:
+                    continue
+                if m.start >= e:
+                    break
+                # take out a chunk
+                if m.start <= s < m.end:
+                    s = m.end
+                if m.start < e <= m.end:
+                    e = m.start
+
+                if e <= s:
+                    covered = True
+                    break
+
+            if not covered:
+                mp.append(Annotation(s, e, "UNK", "IN BOUNDS, NO ANN"))
+        mp.sort(key = lambda x: x.start)
+
+        print("\n".join([str(x) for x in mp]))
+    
 
     def getfmt(self, addr, fmt, sz):
         return struct.unpack(fmt, self.api.getConcreteMemoryAreaValue(addr, sz))[0]
@@ -287,10 +320,25 @@ class Dobby:
             mem += self.api.getSymbolicMemoryValue(MemoryAccess(addr+i, 1))
             self.api.setConcreteMemoryValue(addr+i, mem)
 
-    def loadPE(self, path, base):
+    def loadPE(self, path, base, again=False):
         pe = lief.parse(path)
         if pe is None:
             raise FileNotFoundError(f"Unable to parse file {path}")
+
+        if not again and pe.name in [ x.name for x in self.pes ]:
+            raise KeyError(f"PE with name {pe.name} already loaded")
+
+        # get size, check base doesn't crush existing area
+        end = base
+        for phdr in pe.sections:
+            e = base + phdr.virtual_address + phdr.virtual_size
+            if e > end:
+                end = e
+        
+        if self.inBounds(base, end - base):
+            raise MemoryError(f"Could not load pe {pe.name} at {hex(base)}, because it would clobber existing memory")
+
+        self.pes.append(pe)
 
         dif = base - pe.optional_header.imagebase
 
@@ -361,7 +409,10 @@ class Dobby:
         self.updateBounds(self.apihooks.start, self.apihooks.end)
         
         # annotate symbols from image
-        #TODO
+        for sym in pe.exported_functions:
+            if not sym.name:
+                continue
+            self.addAnn(sym.address + base, sym.address + base, "SYMBOL", False, pe.name + "::" + sym.name)
 
         return pe
 
@@ -414,6 +465,14 @@ class Dobby:
             ctx.api.symbolizeMemory(ma, name+hex(hit_count))
             hit_count += 1
             return HookRet.STOP_INS if stops else HookRet.CONT_INS
+
+    def createThunkHook(self, symname, pename=""):
+        symaddr = self.getSym(symname, pename)
+        def dothunk(hook, ctx, addr, sz, op):
+            ctx.api.setConcreteRegisterValue(ctx.api.registers.rip, symaddr)
+
+            return HookRet.DONE_INS
+        return dothunk
 
     def setApiHandler(self, name, handler, overwrite=False):
         found = [x for x in self.hooks[0] if x.label.endswith("::"+name)]
@@ -503,6 +562,17 @@ class Dobby:
         #TODO keep annotations sorted
         self.ann.append(ann)
         return ann
+
+    def getSym(self, symname, pename=""):
+        symname = pename + "::" + symname
+        match = [ x for x in self.ann if x.mtype == "SYMBOL" and x.label.endswith(symname) ]
+
+        if len(match) == 0:
+            raise KeyError(f"Unable to find Symbol {symname}")
+        if len(match) > 1:
+            raise KeyError(f"Found multiple Symbols matching {symname}")
+
+        return match[0].start
 
     def alloc(self, amt, start=0, label="", roundamt=True):
         if start == 0:
@@ -635,6 +705,8 @@ class Dobby:
         rsp = self.api.getConcreteRegisterValue(rspreg)
         rip = self.api.getConcreteRegisterValue(ripreg)
 
+        #TODO add exception raising
+
         if not self.inBounds(rip, ins.getSize()):
             return StepRet.ERR_IP_OOB
 
@@ -755,6 +827,7 @@ class Dobby:
                     #TODO check write hooks
 
         # actually do a step
+        #TODO how do we detect exceptions like divide by zero?
         if not self.api.processing(ins):
             return StepRet.BAD_INS
 

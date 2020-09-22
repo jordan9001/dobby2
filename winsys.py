@@ -192,14 +192,22 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op):
 
 def ExSystemTimeToLocalTime_hook(hook, ctx, addr, sz, op):
     #TODO
-    raise NotImplementedError("In progress")
+    print("Hook creation in progress")
+    return HookRet.FORCE_STOP_INS
 
 def registerWinHooks(ctx):
     ctx.setApiHandler("RtlDuplicateUnicodeString", RtlDuplicateUnicodeString_hook, "ignore")
-    ctx.setApiHandler("ExSystemTimeToLocalTime", ExSystemTimeToLocalTime, "ignore") 
+    ctx.setApiHandler("ExSystemTimeToLocalTime", ctx.createThunkHook("ExSystemTimeToLocalTime", "ntoskrnl.exe"), "ignore") 
 
+def loadNtos(ctx, base=0xfffff8026be00000):
+    # NOTE just because we load ntos doesn't mean it is initialized at all
+    # Make sure you initalize the components you intend to use
+    print("Loading nt...")
+    ctx.loadPE("ntoskrnl.exe", base)
+    print("Loaded!")
 
 def initSys(ctx):
+    loadNtos(ctx)
     registerWinHooks(ctx)
 
     # setup KUSER_SHARED_DATA at 0xFFFFF78000000000
