@@ -748,7 +748,8 @@ class Dobby:
         #   a hooked location (if not ignorehook)
         #   an out of bounds location
         # we can't know beforehand if it is a write or not, so verify after the instruction
-        #TODO how to automatically detect symbolic expressions that are evaluable based on variables we have set
+        #TODO automatically detect symbolic expressions that are evaluable based on variables we have set
+        #TODO enforce page permissions
         for o in ins.getOperands():
             #TODO check if non-register memory derefs are MemoryAccess as well
             if isinstance(o, self.type_MemoryAccess):
@@ -849,6 +850,7 @@ class Dobby:
 
         # follow up on the write hooks
         if ins.isMemoryWrite():
+            #TODO enforce page permissions
             #TODO
             # also what if they wrote to a hooked location on the stack with a push?
             #TODO
