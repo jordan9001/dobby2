@@ -127,7 +127,10 @@ KeBugCheckEx
 """
 
 
-def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op):
+def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
+    if isemu:
+        raise NotImplementedError("In progress")
+
     # check nothing is symbolized
     if ctx.api.isRegisterSymbolized(ctx.api.registers.rcx):
         print("RtlDuplicateUnicodeString: rcx symbolized")
@@ -190,11 +193,6 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op):
     #print("DEBUG: Did RtlDuplicateUnicodeString")
     #return HookRet.STOP_INS
 
-def ExSystemTimeToLocalTime_hook(hook, ctx, addr, sz, op):
-    #TODO
-    print("Hook creation in progress")
-    return HookRet.FORCE_STOP_INS
-
 def registerWinHooks(ctx):
     ctx.setApiHandler("RtlDuplicateUnicodeString", RtlDuplicateUnicodeString_hook, "ignore")
     ctx.setApiHandler("ExSystemTimeToLocalTime", ctx.createThunkHook("ExSystemTimeToLocalTime", "ntoskrnl.exe"), "ignore") 
@@ -216,6 +214,7 @@ def initSys(ctx):
     ctx.addAnn(shared_data_addr, shared_data_addr + shared_data_sz, "GLOBAL", True, "_KUSER_SHARED_DATA.Timers")
 
     last_inscnt = ctx.inscount
+    last_inscnt_emu = ctx.inscount_emu
     nrover = 0
     mrover = 0
     
@@ -230,12 +229,19 @@ def initSys(ctx):
     # these numbers aren't actually any good because we hook out a looot of functionality?
     # but eh, if things don't work then use a volatile symbol hook here
 
-    def kuser_time_hook(hk, ctx, addr, sz, op):
+    def kuser_time_hook(hk, ctx, addr, sz, op, isemu):
         nonlocal last_inscnt
+        nonlocal last_inscnt_emu
         nonlocal nrover
         nonlocal mrover
-        dif = ctx.inscount - last_inscnt 
-        last_inscnt = ctx.inscount
+        
+        dif = 0
+        if isemu:
+            dif = ctx.inscount_emu - last_inscnt_emu
+            last_inscnt = ctx.inscount_emu
+        else: 
+            dif = ctx.inscount - last_inscnt 
+            last_inscnt = ctx.inscount
 
         nrover += dif
         mrover += dif
@@ -276,8 +282,8 @@ def initSys(ctx):
         #return HookRet.STOP_INS #DEBUG
         return HookRet.CONT_INS
 
-    ctx.addHook(shared_data_addr + 0x8, shared_data_addr+0x20, "r", kuser_time_hook, False, "Interrupt and System Time hook")
-    ctx.addHook(shared_data_addr + 0x320, shared_data_addr+0x32c, "r", kuser_time_hook, False, "Tick Time hook")
+    ctx.addHook(shared_data_addr + 0x8, shared_data_addr+0x20, "r", kuser_time_hook, False, "Interrupt and System Time hook", True)
+    ctx.addHook(shared_data_addr + 0x320, shared_data_addr+0x32c, "r", kuser_time_hook, False, "Tick Time hook", True)
 
     ctx.api.setConcreteMemoryAreaValue(
         shared_data_addr + 0x0,

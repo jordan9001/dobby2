@@ -140,6 +140,7 @@ int cc_filt(unsigned int code, struct _EXCEPTION_POINTERS* ep)
 	return EXCEPTION_EXECUTE_HANDLER;
 }
 
+extern char ROSTR[];
 extern void cc_asm_ii(void);
 extern void cc_asm_ss(void);
 
@@ -161,8 +162,9 @@ void cc(int v)
 					v = *addr;
 					break;
 				case 1: // write violation
-					addr = (int*)"Literal";
+					addr = &ROSTR;
 					*addr = 'T';
+
 					break;
 				case 2: // execute violation
 					addr = (int*)"ABCDEFG";
