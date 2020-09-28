@@ -64,7 +64,8 @@ class SavedState:
     COMP_NONE = 0
     COMP_ZLIB = 1
 
-    def __init__(self):
+    def __init__(self, name):
+        self.name = name
         self.setup = False
 
     def save(self, ctx, isemu, doann=False, dohooks=False, dosyms):
@@ -109,8 +110,10 @@ class SavedState:
 
     def fromfile(fname):
         raise NotImplementedError("TODO")
-        
-        
+
+    def __repr__(self):
+        return f"SaveState({self.name})" 
+
 
 class Dobby:
     def __init__(self, apihookarea=0xffff414100000000):
@@ -1034,24 +1037,33 @@ class Dobby:
         # this hook could happen even if we are not about to execute this instruction
         #TODO
         print("INS_HOOK @", hex(addr))
+
+        #TODO this will go up too much because we get called to much, can we fix that?
+        self.inscount_emu += 1
+
+        if self.trace_emu is not None:
+            if len(self.trace_emu) == 0 or self.trace_emu[-1] != addr:
+                self.trace_emu.append(addr)
+
+        #TODO handle execution hooks
         raise NotImplementedError("In progress")
 
     def emu_rwHook(self, emu, access, addr, sz, val, user_data):
-        #TODO
+        #TODO handle read / write hooks
         print("RW_HOOK @", hex(addr))
 
     def emu_invalMemHook(self, emu, access, addr, sz, val, user_data):
-        #TODO
+        #TODO handle exceptions
         print("BAD_RW_HOOK @", hex(addr))
         return False
 
     def emu_invalInsHook(self, emu, user_data):
-        #TODO
+        #TODO handle exceptions
         print("BAD_INS_HOOK")
         return False
 
     def emu_intrHook(self, emu, intno, user_data):
-        #TODO
+        #TODO handle exceptions
         print("INTERRUPT_HOOK #", intno)
         emu.emu_stop()
     
