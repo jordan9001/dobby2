@@ -59,6 +59,7 @@ class StepRet(Enum):
     BAD_INS = 8
     DREF_SYMBOLIC = 9
     DREF_OOB = 10
+    INTR = 11
 
 class SavedState:
     COMP_NONE = 0
@@ -68,7 +69,7 @@ class SavedState:
         self.name = name
         self.setup = False
 
-    def save(self, ctx, isemu, doann=False, dohooks=False, dosyms):
+    def save(self, ctx, isemu, doann=False, dohooks=False, dosyms=False):
         self.bounds = copy.deepcopy(ctx.bounds)
         
         self.ann = None
@@ -136,6 +137,8 @@ class Dobby:
         self.emu = None
         self.trace_emu = None
         self.inscount_emu = 0
+        self.stepret_emu = StepRet.OK
+        self.intrnum_emu = -1
         self.regtrans = {}
         for x in x64KeyRegs:
             self.regtrans[getattr(self.api.registers, x)] = getattr(unicorn.x86_const, 'UC_X86_REG_' + x.upper())
@@ -1035,36 +1038,56 @@ class Dobby:
 
     def emu_insHook(self, emu, addr, sz, user_data):
         # this hook could happen even if we are not about to execute this instruction
-        #TODO
-        print("INS_HOOK @", hex(addr))
-
-        #TODO this will go up too much because we get called to much, can we fix that?
-        self.inscount_emu += 1
+        # it happens before we are stopped
+        try:
+            #TODO handle execution hooks
+            raise NotImplementedError("In progress")
+        except Exception as e:
+            print("Stopping emulation, exception occured")
+            self.stepret_emu = StepRet.ERR
+            emu.emu_stop()
+            raise e
 
         if self.trace_emu is not None:
             if len(self.trace_emu) == 0 or self.trace_emu[-1] != addr:
                 self.trace_emu.append(addr)
 
-        #TODO handle execution hooks
-        raise NotImplementedError("In progress")
+        #TODO this will go up too much because we get called to much, can we fix that?
+        self.inscount_emu += 1
 
     def emu_rwHook(self, emu, access, addr, sz, val, user_data):
-        #TODO handle read / write hooks
-        print("RW_HOOK @", hex(addr))
+        try: 
+            #TODO handle read / write hooks
+            raise NotImplementedError("In progress")
+        except Exception as e:
+            print("Stopping emulation, exception occured")
+            self.stepret_emu = StepRet.ERR
+            emu.emu_stop()
+            raise e
 
     def emu_invalMemHook(self, emu, access, addr, sz, val, user_data):
-        #TODO handle exceptions
-        print("BAD_RW_HOOK @", hex(addr))
-        return False
+        ret = False
+        try: 
+            #TODO handle read / write hooks
+            raise NotImplementedError("In progress")
+
+            # if no hooks handle it
+            self.stepret_emu = StepRet.DREF_OOB
+        except Exception as e:
+            print("Stopping emulation, exception occured")
+            self.stepret_emu = StepRet.ERR
+            emu.emu_stop()
+            ret = False
+        return ret
 
     def emu_invalInsHook(self, emu, user_data):
-        #TODO handle exceptions
-        print("BAD_INS_HOOK")
+        self.stepret_emu = StepRet.BAD_INS
+        emu.emu_stop()
         return False
 
     def emu_intrHook(self, emu, intno, user_data):
-        #TODO handle exceptions
-        print("INTERRUPT_HOOK #", intno)
+        self.stepret_emu = StepRet.INTR
+        self.intrnum_emu = intno
         emu.emu_stop()
     
     def copyRegToEmu(self):
@@ -1108,7 +1131,8 @@ class Dobby:
         self.emu.hook_add(UC_HOOK_INSN_INVALID, self.emu_invalInsHook, None)
         self.emu.hook_add(UC_HOOK_INTR, self.emu_intrHook, None)
 
-    def step_emu(self):
+    def step_emu(self, ignoreFirst=True):
+        self.stepret_emu = StepRet.OK
         addr = self.emu.reg_read(UC_X86_REG_RIP)
         stat = None
         try:
@@ -1117,7 +1141,8 @@ class Dobby:
             stat = e
         return stat
 
-    def cont_emu(self, n=0):
+    def cont_emu(self, ignoreFirst=True, n=0):
+        self.stepret_emu = StepRet.OK
         addr = self.emu.reg_read(UC_X86_REG_RIP)
         stat = None
         try:
@@ -1126,7 +1151,8 @@ class Dobby:
             stat = e
         return stat
 
-    def until_emu(self, until):
+    def until_emu(self, until, ignoreFirst=True):
+        self.stepret_emu = StepRet.OK
         addr = self.emu.reg_read(UC_X86_REG_RIP)
         stat = None
         try:
@@ -1135,7 +1161,8 @@ class Dobby:
             stat = e
         return stat
 
-    def next_emu(self):
+    def next_emu(self, ignoreFirst=True):
+        self.stepret_emu = StepRet.OK
         #TODO
         pass
 
