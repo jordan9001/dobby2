@@ -36,10 +36,10 @@ def createDrvObj(ctx, start, size, entry, name="DriverObj"):
     # DriverExtension = dex
     ctx.api.setConcreteMemoryAreaValue(d + 0x30, struct.pack("<Q", dex))
     # DriverName
-    initUnicodeStr(ctx, d+0x38, "\\Driver\\" + name)
+    initUnicodeStr(ctx, d+0x38, "\\Driver\\" + name, False)
 
     # HardwareDatabase = ptr str
-    hd = createUnicodeStr(ctx, "\\REGISTRY\\MACHINE\\HARDWARE\\DESCRIPTION\\SYSTEM")
+    hd = createUnicodeStr(ctx, "\\REGISTRY\\MACHINE\\HARDWARE\\DESCRIPTION\\SYSTEM", False)
     ctx.api.setConcreteMemoryAreaValue(d + 0x48, struct.pack("<Q", hd))
 
     # FastIoDispatch = 0
@@ -61,7 +61,7 @@ def createDrvObj(ctx, start, size, entry, name="DriverObj"):
     # ext.Count = 0
     ctx.api.setConcreteMemoryAreaValue(dex + 0x10, struct.pack("<Q", 0))
     # ext.ServiceKeyName
-    initUnicodeStr(ctx, dex+0x18, name)
+    initUnicodeStr(ctx, dex+0x18, name, False)
     # ext.ClientDriverExtension = 0
     ctx.api.setConcreteMemoryAreaValue(dex + 0x28, struct.pack("<Q", 0))
     # ext.FsFilterCallbacks = 0
@@ -75,19 +75,19 @@ def createDrvObj(ctx, start, size, entry, name="DriverObj"):
 
     return d
 
-def createUnicodeStr(ctx, s):
-    ustr = ctx.alloc(0x10)
-    initUnicodeStr(ctx, ustr, s)
+def createUnicodeStr(ctx, s, isemu):
+    ustr = ctx.alloc(0x10, isemu=isemu)
+    initUnicodeStr(ctx, ustr, s, isemu)
     return ustr
 
-def initUnicodeStr(ctx, addr, s):
+def initUnicodeStr(ctx, addr, s, isemu):
     us = s.encode("UTF-16-LE")
-    buf = ctx.alloc(len(us))
-    ctx.api.setConcreteMemoryAreaValue(buf, us)
+    buf = ctx.alloc(len(us), isemu=isemu)
+    ctx.setMemVal(buf, us, isemu)
 
-    ctx.api.setConcreteMemoryAreaValue(addr + 0, struct.pack("<H", len(us)))
-    ctx.api.setConcreteMemoryAreaValue(addr + 2, struct.pack("<H", len(us)))
-    ctx.api.setConcreteMemoryAreaValue(addr + 0x8, struct.pack("<Q", buf))
+    ctx.setu16(addr + 0, len(us), isemu)
+    ctx.setu16(addr + 2, len(us), isemu)
+    ctx.setu64(addr + 0x8, buf, isemu)
 
 
 #TODO more helper stuff
@@ -128,23 +128,21 @@ KeBugCheckEx
 
 
 def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
-    if isemu:
-        raise NotImplementedError("In progress")
-
     # check nothing is symbolized
-    if ctx.api.isRegisterSymbolized(ctx.api.registers.rcx):
-        print("RtlDuplicateUnicodeString: rcx symbolized")
-        return HookRet.STOP_INS
-    if ctx.api.isRegisterSymbolized(ctx.api.registers.rdx):
-        print("RtlDuplicateUnicodeString: rdx symbolized")
-        return HookRet.STOP_INS
-    if ctx.api.isRegisterSymbolized(ctx.api.registers.r8):
-        print("RtlDuplicateUnicodeString: r8 symbolized")
-        return HookRet.STOP_INS
+    if not isemu:
+        if ctx.api.isRegisterSymbolized(ctx.api.registers.rcx):
+            print("RtlDuplicateUnicodeString: rcx symbolized")
+            return HookRet.STOP_INS
+        if ctx.api.isRegisterSymbolized(ctx.api.registers.rdx):
+            print("RtlDuplicateUnicodeString: rdx symbolized")
+            return HookRet.STOP_INS
+        if ctx.api.isRegisterSymbolized(ctx.api.registers.r8):
+            print("RtlDuplicateUnicodeString: r8 symbolized")
+            return HookRet.STOP_INS
 
-    add_nul = ctx.api.getConcreteRegisterValue(ctx.api.registers.rcx)
-    src = ctx.api.getConcreteRegisterValue(ctx.api.registers.rdx)
-    dst = ctx.api.getConcreteRegisterValue(ctx.api.registers.r8)
+    add_nul = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+    src = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+    dst = ctx.getRegVal(ctx.api.registers.r8, isemu)
 
     # check bounds
     if not ctx.inBounds(src, 0x10):
@@ -154,8 +152,8 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
         print("RtlDuplicateUnicodeString: dst oob")
         return HookRet.STOP_INS
 
-    numbytes = ctx.getu16(src)
-    srcbuf = ctx.getu64(src+8)
+    numbytes = ctx.getu16(src, isemu)
+    srcbuf = ctx.getu64(src+8, isemu)
 
     srcval = b""
 
@@ -166,36 +164,39 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
             return HookRet.STOP_INS
 
         for i in range(numbytes):
-            if ctx.api.isMemorySymbolized(MemoryAccess(srcbuf+i, 1)):
+            if not isemu and ctx.api.isMemorySymbolized(MemoryAccess(srcbuf+i, 1)):
                 print("RtlDuplicateUnicodeString: symbolized in src.buf")
                 return HookRet.STOP_INS
             
-        srcval = ctx.api.getConcreteMemoryAreaValue(srcbuf, numbytes)
+        srcval = ctx.getMemVal(srcbuf, numbytes, isemu)
 
     if add_nul > 1 or (add_nul == 1 and numbytes != 0):
         srcval += b"\x00\x00"
 
     if len(srcval) == 0:
         # null buffer, 0 len
-        ctx.setu16(dst + 0x0, 0)
-        ctx.setu16(dst + 0x2, 0)
-        ctx.setu64(dst + 0x8, 0)
+        ctx.setu16(dst + 0x0, 0, isemu)
+        ctx.setu16(dst + 0x2, 0, isemu)
+        ctx.setu64(dst + 0x8, 0, isemu)
     else:
-        dstbuf = ctx.alloc(len(srcval))
-        ctx.api.setConcreteMemoryAreaValue(dstbuf, srcval)
-        ctx.setu16(dst + 0x0, numbytes)
-        ctx.setu16(dst + 0x2, numbytes)
-        ctx.setu64(dst + 0x8, dstbuf)
+        dstbuf = ctx.alloc(len(srcval), isemu=isemu)
+        print("Going to print srcval", srcval)
+        print("To address dstbuf", hex(dstbuf))
+        print("With isemu", isemu)
+        ctx.setMemVal(dstbuf, srcval, isemu)
+        ctx.setu16(dst + 0x0, numbytes, isemu)
+        ctx.setu16(dst + 0x2, numbytes, isemu)
+        ctx.setu64(dst + 0x8, dstbuf, isemu)
 
-    ctx.doRet(0)
+    ctx.doRet(0, isemu)
 
-    return HookRet.DONE_INS
-    #print("DEBUG: Did RtlDuplicateUnicodeString")
-    #return HookRet.STOP_INS
+    #return HookRet.DONE_INS
+    print("DEBUG: Did RtlDuplicateUnicodeString")
+    return HookRet.STOP_INS
 
 def registerWinHooks(ctx):
-    ctx.setApiHandler("RtlDuplicateUnicodeString", RtlDuplicateUnicodeString_hook, "ignore")
-    ctx.setApiHandler("ExSystemTimeToLocalTime", ctx.createThunkHook("ExSystemTimeToLocalTime", "ntoskrnl.exe"), "ignore") 
+    ctx.setApiHandler("RtlDuplicateUnicodeString", RtlDuplicateUnicodeString_hook, "ignore", True)
+    ctx.setApiHandler("ExSystemTimeToLocalTime", ctx.createThunkHook("ExSystemTimeToLocalTime", "ntoskrnl.exe"), "ignore", True) 
 
 def loadNtos(ctx, base=0xfffff8026be00000):
     # NOTE just because we load ntos doesn't mean it is initialized at all
@@ -251,10 +252,10 @@ def initSys(ctx):
             return HookRet.STOP_INS
 
         # get timers at 0x8, 0x14
-        bts = ctx.api.getConcreteMemoryAreaValue(shared_data_addr + 0x8, 0x18)
+        bts = ctx.getMemVal(shared_data_addr + 0x8, 0x18, isemu)
         it, _, st, _ = struct.unpack("<QIQI", bts)
         # get tick count at 0x320
-        bts = ctx.api.getConcreteMemoryAreaValue(shared_data_addr + 0x320, 0xc)
+        bts = ctx.getMemVal(shared_data_addr + 0x320, 0xc, isemu)
         tc, _ = struct.unpack("<QI", bts)
 
         #TODO update timers based on dif
@@ -273,9 +274,9 @@ def initSys(ctx):
 
         # write the values back
         bts = struct.pack("<QI", tc, tc>>32)
-        ctx.api.setConcreteMemoryAreaValue(shared_data_addr + 0x320, bts)
+        ctx.setMemVal(shared_data_addr + 0x320, bts, isemu)
         bts = struct.pack("<QIQI", it, it>>32, st, st>>32)
-        ctx.api.setConcreteMemoryAreaValue(shared_data_addr + 0x8, bts)
+        ctx.setMemVal(shared_data_addr + 0x8, bts, isemu)
 
         #DEBUG
         print("Read from a shared timer")

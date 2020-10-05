@@ -71,6 +71,10 @@ class SavedState:
 
     def save(self, ctx, isemu, doann=False, dohooks=False, dosyms=False):
         self.bounds = copy.deepcopy(ctx.bounds)
+
+        self.hasann = doann
+        self.hashooks = dohooks
+        self.hassyms = dosyms
         
         self.ann = None
         if doann:
@@ -93,16 +97,81 @@ class SavedState:
             addr = b[0]
             val = ctx.getMemVal(addr, sz, isemu)
             cval = zlib.compress(val, 6)
-            mem.append((addr, sz, self.COMP_ZLIB, cval))
+            self.mem.append((addr, sz, self.COMP_ZLIB, cval))
             
-        if not isemu and dosyms:
-            # How do we do this
+        if dosyms:
+            # How do we do this for emu?
             raise NotImplementedError("TODO")
 
-    def load(self, ctx, isemu):
+        self.setup = True
+
+    def load(self, ctx, isemu, doann=False, dohooks=False, dosyms=False):
         if not self.setup:
             raise ValueError("Tried to write a uninitialized state to file")
-        raise NotImplementedError("TODO")
+        
+        if self.hasann and doann:
+            ctx.ann = copy.deepcopy(self.ann)
+        elif doann:
+            print("Warning, tried to load ann from a state without any ann")
+
+        if self.hashooks and dohooks:
+            raise NotImplementedError("TODO")
+        elif doann:
+            print("Warning, tried to load hooks from a state without any hooks")
+
+        if self.hassyms and dosyms:
+            raise NotImplementedError("TODO")
+        elif dosyms:
+            print("Warning, tried to load syms from a state without any syms")
+
+        if isemu:
+            # reset emu mem
+            ctx.emu = None
+            ctx.emu = Uc(UC_ARCH_X86, UC_MODE_64)
+
+        # Load bounds
+        ctx.bounds = copy.deepcopy(self.bounds)
+        lastaddr = 0
+        if isemu:
+            # map mem
+            for b in self.bounds:
+                # round to page boundries?
+                start = b[0] & (~ (self.pgsz-1))
+                if lastaddr > start:
+                    start = lastaddr
+                end = (b[1] + (self.pgsz-1)) & (~ (self.pgsz-1))
+                lastaddr = end
+                sz = end - start
+                self.emu.mem_map(start, sz)
+
+        # Load memory values 
+        for m in self.mem:
+            addr, sz, comptype, cval = m
+
+            val = None
+            if comptype == self.COMP_ZLIB:
+                val = zlib.decompress(cval, bufsize=sz)
+            elif comptype == self.COMP_NONE:
+                val = cval
+            else:
+                raise TypeError("Unknown compression type")
+
+            ctx.setMemVal(addr, val, isemu)
+
+        # Load register values
+        for r in self.regs:
+            name, val = r
+            ctx.setReg(ctx.nameToReg(name), val, isemu)
+
+        # save memory values
+        for b in ctx.bounds:
+            sz = b[1] - b[0]
+            addr = b[0]
+            val = ctx.getMemVal(addr, sz, isemu)
+            cval = zlib.compress(val, 6)
+            mem.append((addr, sz, self.COMP_ZLIB, cval))
+            
+            
 
     def tofile(fname):
         if not self.setup:
@@ -111,6 +180,7 @@ class SavedState:
 
     def fromfile(fname):
         raise NotImplementedError("TODO")
+        self.setup = True
 
     def __repr__(self):
         return f"SaveState({self.name})" 
@@ -139,6 +209,7 @@ class Dobby:
         self.inscount_emu = 0
         self.stepret_emu = StepRet.OK
         self.intrnum_emu = -1
+        self.ignorehookaddr_emu = -1
         self.regtrans = {}
         for x in x64KeyRegs:
             self.regtrans[getattr(self.api.registers, x)] = getattr(unicorn.x86_const, 'UC_X86_REG_' + x.upper())
@@ -258,6 +329,8 @@ class Dobby:
 
         print("\n".join([str(x) for x in mp]))
     
+    def nameToReg(name):
+        return getattr(self.ctx.registers, name)
 
     def getfmt(self, addr, fmt, sz, isemu=False):
         return struct.unpack(fmt, self.getMemVal(addr, sz, isemu))[0]
@@ -350,7 +423,7 @@ class Dobby:
 
     def setMemVal(self, addr, val, isemu=False):
         if isemu:
-            self.emu.mem_write(addr, val)
+            self.emu.mem_write(addr, bytes(val))
         else:
             self.api.setConcreteMemoryAreaValue(addr, val)
 
@@ -690,9 +763,6 @@ class Dobby:
         return match[0].start
 
     def alloc(self, amt, start=0, label="", roundamt=True, isemu=False):
-        if isemu:
-            raise NotImplementedError("alloc not defined for emu yet")
-
         if start == 0:
             start = 0xffff765400000000 if self.priv else 0x660000
 
@@ -716,6 +786,27 @@ class Dobby:
             #TODO keep annotations sorted
 
         self.updateBounds(start, end)
+
+        if isemu:
+            # allocate the memory, needs to be rounded
+            mapstart = start & (~ (self.pgsz-1))
+            mapend = (end + (self.pgsz-1)) & (~ (self.pgsz-1))
+
+            #TODO slow to ask for all regions here?
+            reg_i = self.emu.mem_regions()
+            for r_beg, r_end, _ in reg_i:
+                if mapend < r_beg:
+                    break
+
+                if r_beg <= mapstart <= r_end:
+                    mapstart = (r_end+1)
+                if r_beg < mapend < r_end:
+                    mapend = r_beg
+
+            if mapend > mapstart:
+                print(hex(start), hex(end), hex(mapstart), hex(mapend))
+                self.emu.mem_map(mapstart, mapend-mapstart)
+
         return start
 
     def initState(self, start, end, stackbase=0, priv=0, symbolizeControl=True):
@@ -786,12 +877,16 @@ class Dobby:
         if isemu:
             if self.trace_emu is None:
                 self.trace_emu = []
-        else:
+        if isemu == "both" or not isemu:
             if self.trace is None:
                 self.trace = []
 
     def stopTrace(self, isemu=False):
-        if isemu:
+        if isemu == "both":
+            t = (self.trace_emu, self.trace)
+            self.trace_emu = None
+            self.trace = None
+        elif isemu:
             t = self.trace_emu
             self.trace_emu = None
         else:
@@ -811,6 +906,48 @@ class Dobby:
         inst = Instruction(rip, insbytes)
         self.api.disassembly(inst)
         return inst
+
+    def handle_hook(self, hk, addr, sz, op, ignorehook, isemu):
+        self.lasthook = hk
+
+        handler = hk.handler
+        if isemu:
+            handler = hk.handler_emu
+
+        stopret = StepRet.HOOK_EXEC
+        if op == "r":
+            stopret = StepRet.HOOK_READ
+        elif op == "w":
+            stopret = StepRet.HOOK_WRITE
+        elif op != "e":
+            raise TypeError(f"Unknown op to handler hook \"{op}\"")
+
+        if handler is not None:
+            hret = handler(hk, self, addr, sz, op, isemu)
+            if hret == HookRet.FORCE_STOP_INS:
+                return (True, stopret)
+            elif hret == HookRet.STOP_INS:
+                if not ignorehook:
+                    return (True, stopret)
+                else:
+                    return (False, stopret)
+            elif hret == HookRet.CONT_INS:
+                return (False, StepRet.OK)
+            elif hret == HookRet.DONE_INS:
+                # only applies to exec type hooks
+                if op != "e":
+                    raise TypeError(f"Hook \"{str(hk)}\" returned done, even though the op type is \"{op}\"")
+                return (True, StepRet.OK)
+            elif hret == HookRet.ERR:
+                return (True, StepRet.HOOK_ERR)
+            else:
+                raise TypeError(f"Unknown return from hook handler for hook {eh}")
+        else:
+            # no ignoring API hooks with no handler
+            if (self.apihooks.start <= addr < self.apihooks.end) or (not ignorehook):
+                return (True, stopret)
+            else:
+                return (False, StepRet.OK)
 
     def stepi(self, ins, ignorehook=False):
         if self.stepcb is not None:
@@ -834,6 +971,7 @@ class Dobby:
 
         #TODO add exception raising after possible first_chance stop?
 
+        #TODO enforce page permissions
         if not self.inBounds(rip, ins.getSize()):
             return StepRet.ERR_IP_OOB
 
@@ -844,31 +982,13 @@ class Dobby:
         for eh in self.hooks[0]:
             if eh.start <= rip < eh.end:
                 # hooked
-                self.lasthook = eh
+                #TODO multiple hooks at the same location?
+                stop, sret = self.handle_hook(eh, rip, 1, "e", ignorehook, False)
+                if not stop:
+                    break
+                return sret
 
-                if eh.handler is not None:
-                    hret = eh.handler(eh, self, rip, 1, "e", False)
-                    if hret == HookRet.FORCE_STOP_INS:
-                        return StepRet.HOOK_EXEC
-                    elif hret == HookRet.STOP_INS:
-                        if not ignorehook:
-                            return StepRet.HOOK_EXEC
-                        else:
-                            break
-                    elif hret == HookRet.CONT_INS:
-                        break
-                    elif hret == HookRet.DONE_INS:
-                        return StepRet.OK
-                    elif hret == HookRet.ERR:
-                        return StepRet.HOOK_ERR
-                    else:
-                        raise TypeError(f"Unknown return from hook handler for hook {eh}")
-                else:
-                    # no ignoring API hooks
-                    if (self.apihooks.start <= rip < self.apihooks.end) or (not ignorehook):
-                        return StepRet.HOOK_EXEC
-                    else:
-                        break
+                
 
         # check if we are about to do a memory deref of:
         #   a symbolic value
@@ -926,31 +1046,11 @@ class Dobby:
                 for rh in self.hooks[1]:
                     if rh.start <= addr < rh.end:
                         # hooked
-                        self.lasthook = rh
-
-                        if rh.handler is not None:
-                            hret = rh.handler(eh, self, addr, size, "r", False)
-                            if hret == HookRet.FORCE_STOP_INS:
-                                return StepRet.HOOK_EXEC
-                            elif hret == HookRet.STOP_INS:
-                                if not ignorehook:
-                                    return StepRet.HOOK_READ
-                                else:
-                                    break
-                            elif hret == HookRet.CONT_INS:
-                                break
-                            elif hret == HookRet.DONE_INS:
-                                return StepRet.OK
-                            elif hret == HookRet.ERR:
-                                return StepRet.HOOK_ERR
-                            else:
-                                raise TypeError(f"Unknown return from hook handler for hook {rh}")
-                        else:
-                            if not ignorehook:
-                                return StepRet.HOOK_READ
-                            else:
-                                break
-
+                        #TODO multiple hooks at the same location?
+                        stop, sret = self.handle_hook(rh, addr, size, "r", ignorehook, False)
+                        if not stop:
+                            break
+                        return sret
                     #TODO check write hooks
 
         #TODO check ins.isSymbolized?
@@ -1037,16 +1137,28 @@ class Dobby:
         return self.step(ignoreFirst)
 
     def emu_insHook(self, emu, addr, sz, user_data):
+        #DEBUG
+        print("INSHOOK", hex(addr))
         # this hook could happen even if we are not about to execute this instruction
         # it happens before we are stopped
+        ignorehook = (addr == self.ignorehookaddr_emu)
         try:
-            #TODO handle execution hooks
-            raise NotImplementedError("In progress")
+            for eh in self.hooks[0]:
+                if eh.start <= addr < eh.end:
+                    # hooked
+                    stop, sret = self.handle_hook(eh, addr, 1, "e", ignorehook, True)
+                    if not stop:
+                        break
+                    self.stepret_emu = sret
+                    emu.emu_stop()
+                    return
         except Exception as e:
-            print("Stopping emulation, exception occured")
+            print("Stopping emulation, exception occured during insHook:", e)
             self.stepret_emu = StepRet.ERR
             emu.emu_stop()
             raise e
+
+        #TODO if we want to print regs, print it out here
 
         if self.trace_emu is not None:
             if len(self.trace_emu) == 0 or self.trace_emu[-1] != addr:
@@ -1056,33 +1168,79 @@ class Dobby:
         self.inscount_emu += 1
 
     def emu_rwHook(self, emu, access, addr, sz, val, user_data):
-        try: 
-            #TODO handle read / write hooks
-            raise NotImplementedError("In progress")
+        #TODO why can't I read registers from here?
+        try:
+            # handle read / write hooks
+            op = "r"
+            if access == UC_MEM_WRITE:
+                op = "w"
+            
+            if op == "r":
+                for rh in self.hooks[1]:
+                    if rh.start <= addr < rh.end:
+                        # hooked
+                        stop, sret = self.handle_hook(rh, addr, sz, "r", False, True)
+                        if not stop:
+                            break
+                        self.stepret_emu = sret
+                        emu.emu_stop()
+                        return
+            elif op == "w":
+                for wh in self.hooks[2]:
+                    if wh.start <= addr < wh.end:
+                        # hooked
+                        stop, sret = self.handle_hook(wh, addr, sz, "w", False, True)
+                        if not stop:
+                            break
+                        self.stepret_emu = sret
+                        emu.emu_stop()
+                        return
         except Exception as e:
-            print("Stopping emulation, exception occured")
+            print("Stopping emulation, exception occured during rwHook:", e)
             self.stepret_emu = StepRet.ERR
             emu.emu_stop()
             raise e
 
     def emu_invalMemHook(self, emu, access, addr, sz, val, user_data):
+        #TODO why can't I read registers from here?
         ret = False
         try: 
-            #TODO handle read / write hooks
-            raise NotImplementedError("In progress")
+            # handle read / write hooks
+            op = "r"
+            if access == UC_MEM_WRITE:
+                op = "w"
+            
+            if op == "r":
+                for rh in self.hooks[1]:
+                    if rh.start <= addr < rh.end:
+                        # hooked
+                        stop, sret = self.handle_hook(rh, addr, sz, "r", False, True)
+                        if not stop:
+                            break
+                        self.stepret_emu = sret
+                        emu.emu_stop()
+                        return
+            elif op == "w":
+                for wh in self.hooks[2]:
+                    if wh.start <= addr < wh.end:
+                        # hooked
+                        stop, sret = self.handle_hook(wh, addr, sz, "w", False, True)
+                        if not stop:
+                            break
+                        self.stepret_emu = sret
+                        emu.emu_stop()
+                        return
 
             # if no hooks handle it
             self.stepret_emu = StepRet.DREF_OOB
         except Exception as e:
-            print("Stopping emulation, exception occured")
+            print("Stopping emulation, exception occured during invalMemHook:", e)
             self.stepret_emu = StepRet.ERR
-            emu.emu_stop()
             ret = False
         return ret
 
     def emu_invalInsHook(self, emu, user_data):
         self.stepret_emu = StepRet.BAD_INS
-        emu.emu_stop()
         return False
 
     def emu_intrHook(self, emu, intno, user_data):
@@ -1132,39 +1290,67 @@ class Dobby:
         self.emu.hook_add(UC_HOOK_INTR, self.emu_intrHook, None)
 
     def step_emu(self, ignoreFirst=True):
+
         self.stepret_emu = StepRet.OK
-        addr = self.emu.reg_read(UC_X86_REG_RIP)
         stat = None
+
+        addr = self.emu.reg_read(UC_X86_REG_RIP)
+
+        self.ignorehookaddr_emu = -1
+        if ignoreFirst:
+            self.ignorehookaddr_emu = addr
+
         try:
             self.emu.emu_start(addr, 0xffffffffffffffff, 0, 1)
         except UcError as e:
             stat = e
-        return stat
+
+        return (self.stepret_emu, stat)
 
     def cont_emu(self, ignoreFirst=True, n=0):
         self.stepret_emu = StepRet.OK
         addr = self.emu.reg_read(UC_X86_REG_RIP)
         stat = None
+
+        self.ignorehookaddr_emu = -1
+        if ignoreFirst:
+            self.ignorehookaddr_emu = addr
+
         try:
             self.emu.emu_start(addr, 0xffffffffffffffff, 0, n)
         except UcError as e:
             stat = e
-        return stat
+
+        return (self.stepret_emu, stat)
 
     def until_emu(self, until, ignoreFirst=True):
         self.stepret_emu = StepRet.OK
-        addr = self.emu.reg_read(UC_X86_REG_RIP)
         stat = None
+
+        addr = self.emu.reg_read(UC_X86_REG_RIP)
+
+        self.ignorehookaddr_emu = -1
+        if ignoreFirst:
+            self.ignorehookaddr_emu = addr
+
         try:
             self.emu.emu_start(addr, until, 0, 0)
         except UcError as e:
             stat = e
-        return stat
+
+        return (self.stepret_emu, stat)
 
     def next_emu(self, ignoreFirst=True):
         self.stepret_emu = StepRet.OK
-        #TODO
-        pass
+        stat = None
+
+        addr = self.emu.reg_read(UC_X86_REG_RIP)
+
+        self.ignorehookaddr_emu = -1
+        if ignoreFirst:
+            self.ignorehookaddr_emu = addr
+
+        raise NotImplementedError("TODO")
 
 
 # utility helper functions and stuff
