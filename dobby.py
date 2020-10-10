@@ -245,8 +245,12 @@ class Dobby:
         for b in self.bounds:
             print(hex(b[0]),'-',hex(b[1]))
 
+    def printAst(self, ast, tabbed=4):
+        hexed = ' '.join(['bv'+hex(int(x[2:])) if x.startswith('bv') else x for x in str(ast).split()])
+        raise NotImplementedError("TODO")
+
     def printReg(self, reg, isemu=False, simp=True):
-        print(reg, end=" = ")
+        print(reg.getName(), end=" = ")
 
         if not isemu and self.api.isRegisterSymbolized(reg):
             s = self.api.getSymbolicRegister(reg)
@@ -334,6 +338,11 @@ class Dobby:
 
         print("\n".join([str(x) for x in mp]))
     
+    def printEmuMap(self):
+        reg_i = self.emu.mem_regions()
+        for r_beg, r_end, _ in reg_i:
+            print(hex(r_beg) +'-'+ hex(r_end))
+    
     def nameToReg(name):
         return getattr(self.ctx.registers, name)
 
@@ -403,6 +412,25 @@ class Dobby:
 
             mem.append(c)
         return bytes(mem)
+
+    def getCWStr(self, addr, isemu=False):
+        mem = bytearray()
+        while True:
+            if not self.inBounds(addr, 2):
+                raise MemoryError("Tried to read a CWStr out of bounds")
+            c = self.getMemVal(addr, 2, isemu)[0]
+            if c == b'\x00\x00':
+                break
+            addr += 1
+
+            mem.append(c)
+        return bytes(mem)
+
+    def disass(self, addr=-1, count=16, isemu=False):
+        if addr == -1:
+            addr = self.getRegVal(self.api.registers.rip, isemu)
+        #TODO
+        raise NotImplementedError("TODO")
 
     def getRegVal(self, reg, isemu=False):
         if isemu:
@@ -589,6 +617,9 @@ class Dobby:
         emuhandler = None
         if andemu == True:
             emuhandler = handler
+        elif andemu == "only":
+            emuhandler = handler
+            handler = None
         if andemu == "nop":
             emuhandler = self.noopemuhook
         h = Hook(start, end, label, handler, emuhandler)
@@ -644,12 +675,12 @@ class Dobby:
         
         self.addHook(addr, addr+sz, op, vshook, False, name + "_VolHook", True)
 
-    def createThunkHook(self, symname, pename=""):
+    def createThunkHook(self, symname, pename="", dostop=False):
         symaddr = self.getSym(symname, pename)
         def dothunk(hook, ctx, addr, sz, op, isemu):
             ctx.setRegVal(ctx.api.registers.rip, symaddr, isemu)
 
-            return HookRet.DONE_INS
+            return HookRet.DONE_INS if not dostop else HookRet.STOP_INS
         return dothunk
 
     def stopNextHook(self, hook, isemu=False):
@@ -911,7 +942,7 @@ class Dobby:
 
     def cmpTraces(self):
         if len(self.trace_emu) != len(self.trace):
-            print("Traces len differ")
+            print("Traces len differ. Emu:", len(self.trace_emu), "Symb:", len(self.trace))
 
         l = min(len(self.trace_emu), len(self.trace))
 
@@ -1060,17 +1091,21 @@ class Dobby:
                 addr = 0
                 if baseregid != 0:
                     addr += self.api.getConcreteRegisterValue(basereg)
+                    addr &= 0xffffffffffffffff
 
                 if indexregid != 0:
                     scale = o.getScale().getValue()
                     addr += (scale * self.api.getConcreteRegisterValue(indexreg))
+                    addr &= 0xffffffffffffffff
 
                 disp = o.getDisplacement().getValue()
                 addr += disp
+                addr &= 0xffffffffffffffff
                 size = o.getSize()
 
                 # check access is in bounds
                 if not self.inBounds(addr, size):
+                    print("DEBUG: oob dref at", hex(addr))
                     return StepRet.DREF_OOB
 
                 # check if access is hooked
@@ -1095,7 +1130,9 @@ class Dobby:
         self.inscount += 1
 
         if self.trace is not None:
-            self.trace.append((ins.getAddress(), ins.getDisassembly()))
+            addr = ins.getAddress()
+            if len(self.trace) == 0 or self.trace[-1][0] != addr:
+                self.trace.append((addr, ins.getDisassembly()))
 
         # check if we forked rip
         if self.api.isRegisterSymbolized(ripreg):
@@ -1185,6 +1222,8 @@ class Dobby:
                     stop, sret = self.handle_hook(eh, addr, 1, "e", ignorehook, True)
                     if not stop:
                         break
+                    if sret == StepRet.OK:
+                        return
                     self.stepret_emu = sret
                     emu.emu_stop()
                     self.trystop_emu = True
@@ -1196,10 +1235,8 @@ class Dobby:
             self.trystop_emu = True
             raise e
 
-        #TODO if we want to print regs, print it out here
-
         if self.trace_emu is not None:
-            if len(self.trace_emu) == 0 or self.trace_emu[-1] != addr:
+            if len(self.trace_emu) == 0 or self.trace_emu[-1][0] != addr:
                 self.trace_emu.append((addr,))
 
         #TODO this will go up too much because we get called to much, can we fix that?
@@ -1343,6 +1380,9 @@ class Dobby:
         self.emu.hook_add(UC_HOOK_INTR, self.emu_intrHook, None)
 
     def step_emu(self, ignoreFirst=True):
+        if self.emu == None:
+            print("Emu is not initalized")
+            return
 
         self.stepret_emu = StepRet.OK
         stat = None
@@ -1362,6 +1402,10 @@ class Dobby:
         return (self.stepret_emu, stat)
 
     def cont_emu(self, ignoreFirst=True, n=0):
+        if self.emu == None:
+            print("Emu is not initalized")
+            return
+
         self.stepret_emu = StepRet.OK
         addr = self.emu.reg_read(UC_X86_REG_RIP)
         stat = None
@@ -1379,6 +1423,10 @@ class Dobby:
         return (self.stepret_emu, stat)
 
     def until_emu(self, until, ignoreFirst=True):
+        if self.emu == None:
+            print("Emu is not initalized")
+            return
+
         self.stepret_emu = StepRet.OK
         stat = None
         self.trystop_emu = False
@@ -1397,6 +1445,10 @@ class Dobby:
         return (self.stepret_emu, stat)
 
     def next_emu(self, ignoreFirst=True):
+        if self.emu == None:
+            print("Emu is not initalized")
+            return
+
         self.stepret_emu = StepRet.OK
         stat = None
         self.trystop_emu = False

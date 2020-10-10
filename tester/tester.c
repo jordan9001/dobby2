@@ -11,7 +11,7 @@ int test_rec(int v)
     static int stat = 42;
 
     v = v + v + stat;
-    stat += 0x1
+    stat += 0x1;
     if (v & 1) {
         v = test_rec(v); 
     } else if (v < 0) {
@@ -28,7 +28,7 @@ int main(int argc, char** argv)
 
     if (argc > 1) {
         pid = GetCurrentProcessId();
-        printf("PID = %ld\n", pid);
+        printf("PID = %d\n", pid);
         printf("argv1 = %s\n", argv[1]);
     }
     printf("GLE = %ld\n", GetLastError());

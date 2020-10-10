@@ -191,9 +191,20 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
     print("DEBUG: Did RtlDuplicateUnicodeString")
     return HookRet.STOP_INS
 
+def setNtosThunkHook(ctx, name, dostop):
+    ctx.setApiHandler(name, ctx.createThunkHook(name, "ntoskrnl.exe", dostop), "ignore", True)
+
 def registerWinHooks(ctx):
     ctx.setApiHandler("RtlDuplicateUnicodeString", RtlDuplicateUnicodeString_hook, "ignore", True)
-    ctx.setApiHandler("ExSystemTimeToLocalTime", ctx.createThunkHook("ExSystemTimeToLocalTime", "ntoskrnl.exe"), "ignore", True) 
+    setNtosThunkHook(ctx, "ExSystemTimeToLocalTime", False)
+    setNtosThunkHook(ctx, "RtlTimeToTimeFields", False)
+    setNtosThunkHook(ctx, "_stricmp", True)
+    setNtosThunkHook(ctx, "wcscat_s", True)
+    setNtosThunkHook(ctx, "wcscpy_s", True)
+    setNtosThunkHook(ctx, "RtlInitUnicodeString", True)
+    setNtosThunkHook(ctx, "swprintf_s", True)
+    setNtosThunkHook(ctx, "vswprintf_s", True)
+    setNtosThunkHook(ctx, "_vsnwprintf", True)
 
 def loadNtos(ctx, base=0xfffff8026be00000):
     # NOTE just because we load ntos doesn't mean it is initialized at all

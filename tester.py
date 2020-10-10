@@ -35,7 +35,7 @@ def onexitHook(hook, ctx, addr, sz, op, isemu):
     return ctx.retzerohook(hook, ctx, addr, sz, op, isemu)
 
 def printfHook(hook, ctx, addr, sz, op, isemu):
-    fmtptr = ctx.api.getRegVal(rcx, isemu)
+    fmtptr = ctx.getRegVal(rcx, isemu)
     fmt = ctx.getCStr(fmtptr, isemu) 
 
     print(f"Printf fmt: {str(fmt, 'ascii')}")
@@ -45,10 +45,10 @@ def printfHook(hook, ctx, addr, sz, op, isemu):
     return HookRet.STOP_INS
 
 
-ctx.setApiHandler("_onexit", onexitHook)
-ctx.setApiHandler("GetCurrentProcessId", ctx.retzerohook)
-ctx.setApiHandler("GetLastError", ctx.retzerohook)
-ctx.setApiHandler("printf", printfHook)
+#ctx.setApiHandler("_onexit", onexitHook, True, True)
+ctx.setApiHandler("GetCurrentProcessId", ctx.retzerohook, True, True)
+ctx.setApiHandler("GetLastError", ctx.retzerohook, True, True)
+ctx.setApiHandler("printf", printfHook, True, True)
 
 # add a breakpoint
 ctx.addHook(0x40156f, 0x401570, "e", None, False, "Breakpoint: Check Stack before", True)
@@ -67,5 +67,8 @@ ctx.api.setConcreteMemoryAreaValue(argv + 0x18, argv0)
 ctx.api.setConcreteMemoryAreaValue(argv + 0x18 + len(argv0), argv1)
 ctx.api.setConcreteRegisterValue(rdx, argv)
 print("ARGV at", hex(argv))
+
+ctx.startTrace("both")
+ctx.copyStateToEmu()
 
 print("ctx prepped for tester.exe")

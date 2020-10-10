@@ -18,8 +18,7 @@ get_realpid:
     
     xor rax, rax
     xor rcx, rcx
-    lea rax, gs:[rax + 0x850 + (rcx * 2)]
-    mov rax, [rax]
+    mov rax, gs:[rax + 0x850 + (rcx * 2)]
     ret
     
     
