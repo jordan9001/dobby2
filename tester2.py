@@ -31,21 +31,22 @@ rip = ctx.api.registers.rip
 # add in predefined API hooks    
 
 def putsHook(hook, ctx, addr, sz, op, isemu):
-    fmtptr = ctx.api.getConcreteRegisterValue(rcx)
+    fmtptr = ctx.getRegVal(rcx)
     fmt = ctx.getCStr(fmtptr, isemu) 
 
     print(f"Puts: {str(fmt, 'ascii')}")
 
     ctx.retzerohook(hook, ctx, addr, sz, op, isemu)
 
-    return HookRet.DONE_INS
+    #return HookRet.DONE_INS
+    return HookRet.STOP_INS
 
 ctx.setApiHandler("puts", putsHook, "ignore", True)
 
 # setup argc argv
 #ctx.api.symbolizeRegister(rcx, "ARGC")
 #ctx.api.symbolizeRegister(rdx, "ARGV")
-ctx.api.setConcreteRegisterValue(rcx, 2)
+ctx.setRegVal(rcx, 2)
 argv0 = b"Test2.exe\0"
 argv1 = b"AAAA\0"
 argv = ctx.alloc((8*3) + len(argv0) + len(argv1))
@@ -55,5 +56,8 @@ ctx.setu64(argv+0x10, 0)
 ctx.api.setConcreteMemoryAreaValue(argv + 0x18, argv0)
 ctx.api.setConcreteMemoryAreaValue(argv + 0x18 + len(argv0), argv1)
 ctx.api.setConcreteRegisterValue(rdx, argv)
+
+ctx.copyStateToEmu()
+ctx.startTrace("both")
 
 print("ctx prepped for Test2.exe")

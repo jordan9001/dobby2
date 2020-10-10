@@ -180,9 +180,6 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
         ctx.setu64(dst + 0x8, 0, isemu)
     else:
         dstbuf = ctx.alloc(len(srcval), isemu=isemu)
-        print("Going to print srcval", srcval)
-        print("To address dstbuf", hex(dstbuf))
-        print("With isemu", isemu)
         ctx.setMemVal(dstbuf, srcval, isemu)
         ctx.setu16(dst + 0x0, numbytes, isemu)
         ctx.setu16(dst + 0x2, numbytes, isemu)
