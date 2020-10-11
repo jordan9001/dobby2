@@ -246,8 +246,7 @@ class Dobby:
             print(hex(b[0]),'-',hex(b[1]))
 
     def printAst(self, ast, tabbed=4):
-        hexed = ' '.join(['bv'+hex(int(x[2:])) if x.startswith('bv') else x for x in str(ast).split()])
-        raise NotImplementedError("TODO")
+        print(taboutast(str(ast)))
 
     def printReg(self, reg, isemu=False, simp=True):
         print(reg.getName(), end=" = ")
@@ -1493,6 +1492,97 @@ def hexdmp(stuff, start=0):
             else:
                 print(".", end="")
         print()
+
+def taboutast(h, ta=2, hexify=True, maxline=90):
+    if hexify:
+        h = ' '.join(['bv'+hex(int(x[2:])) if x.startswith('bv') else x for x in h.split()])
+
+    out = ""
+    tc = ' '
+    tb = tc * ta
+    tl = 0
+    i = 0
+    while i < len(h):
+        assert tl >= 0
+        c = h[i]
+        if c == '(':
+            tl += 1
+            assert i+1 < len(h)
+            cn = h[i+1]
+            end = -1
+            # first check if the () of this one will fit in this line
+            
+            depth = 0
+            ii = i+1
+            didline = False
+            while True:
+                cl = h.find(')', ii)
+                op = h.find('(', ii)
+
+                assert cl != -1
+
+                if (cl - i) > maxline:
+                    break
+                
+                if op == -1 or cl < op:
+                    if depth <= 0:
+                        # at end
+                        end = cl
+                        break
+                    else:
+                        depth -= 1
+                        ii = cl+1
+                else:
+                    depth += 1
+                    ii = op+1
+
+            #DEBUG
+            #end = -1
+
+            if end != -1:
+                tl -= 1
+ 
+            # otherwise if it starts with a (_ grab that as the op
+            elif cn == '(':
+                assert h[i+2] == '_'
+                # print all of this (group) before newline
+                end = h.find(')', i)
+                assert end != -1
+                check = h.find('(', i+2)
+                assert check == -1 or check > end
+            # otherwise grab the op
+            else:
+                end = h.find(' ', i)
+                assert end != -1
+                end = end-1
+
+            out += h[i:end+1]
+            i = end
+            
+            out += '\n' + (tb * tl)
+            while (i+1) < len(h) and h[i+1] == ' ':
+                i += 1
+        elif c == ')':
+            tl -= 1
+            if len(out) > 0 and out[-1] != tc:
+                out += '\n' + (tb * tl)
+            else:
+                # they tabbed us too much
+                out = out[:0 - len(tb)]
+            out += c
+            out += '\n' + (tb * tl)
+            while (i+1) < len(h) and h[i+1] == ' ':
+                i += 1
+        elif c == ' ':
+            out += '\n' + (tb * tl)
+            while (i+1) < len(h) and h[i+1] == ' ':
+                i += 1
+        else:
+            out += c
+        
+        i += 1
+
+    return out
 
 
 x64KeyRegs = [
