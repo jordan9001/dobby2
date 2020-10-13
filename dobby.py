@@ -417,10 +417,10 @@ class Dobby:
         while True:
             if not self.inBounds(addr, 2):
                 raise MemoryError("Tried to read a CWStr out of bounds")
-            c = self.getMemVal(addr, 2, isemu)[0]
+            c = self.getMemVal(addr, 2, isemu)
             if c == b'\x00\x00':
                 break
-            addr += 1
+            addr += 2
 
             mem.append(c)
         return bytes(mem)
@@ -940,6 +940,7 @@ class Dobby:
         return t
 
     def cmpTraces(self):
+        # looks like trying to stop execution with ^C can make the trace skip?
         if len(self.trace_emu) != len(self.trace):
             print("Traces len differ. Emu:", len(self.trace_emu), "Symb:", len(self.trace))
 
@@ -1049,7 +1050,8 @@ class Dobby:
                     break
                 return sret
 
-                
+        #TODO handle special instructions that Triton might not capture the way we want
+        #TODO rdtsc?
 
         # check if we are about to do a memory deref of:
         #   a symbolic value

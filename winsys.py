@@ -7,10 +7,11 @@ from dobby import *
 from triton import *
 
 # windows kernel helper functions
-def createDrvObj(ctx, start, size, entry, name="DriverObj"):
+def createDrvObj(ctx, start, size, entry, path, name="DriverObj"):
     dobjsz = 0x150
     d = ctx.alloc(dobjsz)
     dex = ctx.alloc(0x50)
+    dte = ctx.alloc(0x120)
 
     # initialize driver object
     # type = 0x4
@@ -29,9 +30,38 @@ def createDrvObj(ctx, start, size, entry, name="DriverObj"):
     # DriverSize = size
     ctx.api.setConcreteMemoryAreaValue(d + 0x20, struct.pack("<I", size))
     
-    # DriverSection = ??
-    #TODO
-    ctx.api.symbolizeMemory(MemoryAccess(d+0x28, 8), name+".DriverSection")
+    # DriverSection = LDR_DATA_TABLE_ENTRY
+    # not sure what most of these fields are, so we will see what is used
+    # set up DriverSection
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0x0, 0x10), name + ".DriverSection.InLoadOrderLinks")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0x10, 0x10), name + ".DriverSection.InMemoryOrderLinks")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0x20, 0x10), name + ".DriverSection.InInitializationOrderLinks")
+    ctx.setu64(dte+0x30, start)
+    ctx.setu64(dte+0x38, entry)
+    ctx.setu64(dte+0x40, size)
+    initUnicodeStr(ctx, dte+0x48, path, False)
+    initUnicodeStr(ctx, dte+0x58, path.split('\\')[-1], False)
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0x68, 0x8), name + ".DriverSection.Flags")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0x70, 0x10), name + ".DriverSection.HashLinks")
+    ctx.setu64(dte+0x80, 0) # TimeDateStamp
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0x88, 0x8), name + ".DriverSection.EntryPointActivationContext")
+    ctx.setu64(dte+0x90, 0) # Lock
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0x98, 0x8), name + ".DriverSection.DdagNode")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0xa0, 0x10), name + ".DriverSection.NodeModuleLink")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0xb0, 0x8), name + ".DriverSection.LoadContext")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0xb8, 0x8), name + ".DriverSection.ParentDllBase")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0xc0, 0x8), name + ".DriverSection.SwitchBackContext")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0xc8, 0x20), name + ".DriverSection.IndexNodeStuff")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0xf8, 0x8), name + ".DriverSection.OriginalBase")
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0x100, 0x8), name + ".DriverSection.LoadTime")
+    ctx.setu32(dte+0x108, 0) # BaseNameHashValue
+    ctx.setu32(dte+0x10c, 0) # LoadReasonStaticDependency
+    ctx.api.symbolizeMemory(MemoryAccess(dte+0x110, 4), name + ".DriverSection.ImplicitPathOptions")
+    ctx.setu32(dte+0x118, 0) # DependentLoadFlags
+    ctx.setu32(dte+0x11c, 0) # SigningLevel
+
+    #ctx.api.symbolizeMemory(MemoryAccess(d+0x28, 8), name+".DriverSection")
+    ctx.setu64(d+0x28, dte)
  
     # DriverExtension = dex
     ctx.api.setConcreteMemoryAreaValue(d + 0x30, struct.pack("<Q", dex))
@@ -126,6 +156,29 @@ ExAllocatePoolWithTag
 KeBugCheckEx
 """
 
+def ExAllocatePoolWithTag_hook(hook, ctx, addr, sz, op, isemu):
+    #TODO actually have an allocator? Hope they don't do this a lot
+    #TODO memory permissions based on pool
+    amt = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+    tag = struct.pack("<I", ctx.getRegVal(ctx.api.registers.r8, isemu))
+    
+    area = ctx.alloc(amt, isemu=isemu)
+    print("ExAllocatePoolWithTag", hex(amt), tag, '=', hex(area))
+
+    ctx.doRet(area, isemu)
+    return HookRet.STOP_INS
+    #return HookRet.DONE_INS
+
+def ExFreePoolWithTag_hook(hook, ctx, addr, sz, op, isemu):
+    #TODO actually do this?
+
+    area = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+
+    print("ExFreePoolWithTag", hex(area))
+
+    ctx.doRet(area, isemu)
+    return HookRet.STOP_INS
+    #return HookRet.DONE_INS
 
 def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
     # check nothing is symbolized
@@ -196,6 +249,8 @@ def setNtosThunkHook(ctx, name, dostop):
 
 def registerWinHooks(ctx):
     ctx.setApiHandler("RtlDuplicateUnicodeString", RtlDuplicateUnicodeString_hook, "ignore", True)
+    ctx.setApiHandler("ExAllocatePoolWithTag", ExAllocatePoolWithTag_hook, "ignore", True)
+    ctx.setApiHandler("ExFreePoolWithTag", ExFreePoolWithTag_hook, "ignore", True)
     setNtosThunkHook(ctx, "ExSystemTimeToLocalTime", False)
     setNtosThunkHook(ctx, "RtlTimeToTimeFields", False)
     setNtosThunkHook(ctx, "_stricmp", True)
