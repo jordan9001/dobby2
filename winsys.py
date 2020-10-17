@@ -119,6 +119,14 @@ def initUnicodeStr(ctx, addr, s, isemu):
     ctx.setu16(addr + 2, len(us), isemu)
     ctx.setu64(addr + 0x8, buf, isemu)
 
+def readUnicodeStr(ctx, addr, isemu):
+    l = ctx.getu16(addr, isemu)
+    ptr = ctx.getu64(addr+0x8, isemu)
+    if not isemu and ctx.api.isMemorySymbolized(MemoryAccess(addr+8, 8)):
+        print("Tried to read from a symbolized buffer in a unicode string")
+        return ""
+    b = ctx.getMemVal(ptr, l, isemu)
+    return str(b, "UTF_16_LE")
 
 #TODO more helper stuff
 
@@ -132,37 +140,32 @@ BCryptDestroyHash
 BCryptCloseAlgorithmProvider
 KeIpiGenericCall
 __C_specific_handler
-ExFreePoolWithTag
-ZwClose
 _stricmp
-RtlDuplicateUnicodeString
-wcscat_s
-wcscpy_s
-RtlInitUnicodeString
 ZwReadFile
 ZwWriteFile
-IoCreateFileEx
 ZwFlushBuffersFile
 ZwQuerySystemInformation
-RtlTimeToTimeFields
 KeAreAllApcsDisabled
-ExSystemTimeToLocalTime
-swprintf_s
-vswprintf_s
-_vsnwprintf
 KeInitializeApc
 KeInsertQueueApc
-ExAllocatePoolWithTag
 KeBugCheckEx
 """
+
+poolAllocations = [] # see ExAllocatePoolWithTag
+handles = {} # number : (object,)
+nexthandle = 1
 
 def ExAllocatePoolWithTag_hook(hook, ctx, addr, sz, op, isemu):
     #TODO actually have an allocator? Hope they don't do this a lot
     #TODO memory permissions based on pool
+    pool = ctx.getRegVal(ctx.api.registers.rcx, isemu)
     amt = ctx.getRegVal(ctx.api.registers.rdx, isemu)
     tag = struct.pack("<I", ctx.getRegVal(ctx.api.registers.r8, isemu))
     
     area = ctx.alloc(amt, isemu=isemu)
+
+    poolAllocations.append((pool, amt, tag, area))
+
     print("ExAllocatePoolWithTag", hex(amt), tag, '=', hex(area))
 
     ctx.doRet(area, isemu)
@@ -244,6 +247,116 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
     print("DEBUG: Did RtlDuplicateUnicodeString")
     return HookRet.STOP_INS
 
+def IoCreateFileEx_hook(hook, ctx, addr, sz, op, isemu):
+    global nexthandle
+    h = nexthandle
+    nexthandle += 1
+
+    if not isemu:
+        s = False
+        s = s or ctx.api.isRegisterSymbolized(ctx.api.registers.rcx)
+        s = s or ctx.api.isRegisterSymbolized(ctx.api.registers.r8)
+        s = s or ctx.api.isRegisterSymbolized(ctx.api.registers.r9)
+        if s:
+            print("One of the parameter registers is symbolized in hook!")
+            return HookRet.FORCE_STOP_INS
+
+    phandle = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+    oa = ctx.getRegVal(ctx.api.registers.r8, isemu)
+    iosb = ctx.getRegVal(ctx.api.registers.r9, isemu)
+    sp = ctx.getRegVal(ctx.api.registers.rsp, isemu)
+    disp = ctx.getu32(sp + 0x28 + (3 * 8), isemu)
+    driverctx = ctx.getu64(sp + 0x28 + (10 * 8), isemu)
+
+    if not isemu and ctx.api.isMemorySymbolized(MemoryAccess(oa+0x10, 8)):
+        print("Unicode string in object attributes is symbolized")
+        return HookRet.FORCE_STOP_INS
+    namep = ctx.getu64(oa+0x10)
+    name = readUnicodeStr(ctx, namep, isemu)
+
+    ctx.setu64(phandle, h, isemu)
+    
+    # set up iosb
+    info = 0
+    disp_str = ""
+    if disp == 0:
+        disp_str = "FILE_SUPERSEDE"
+        info = 0 # FILE_SUPERSEDED
+    elif disp == 1:
+        disp_str = "FILE_OPEN"
+        info = 1 # FILE_OPENED
+    elif disp == 2:
+        disp_str = "FILE_CREATE"
+        info = 2 # FILE_CREATED
+    elif disp == 3:
+        disp_str = "FILE_OPEN_IF"
+        info = 2 # FILE_CREATED
+    elif disp == 4:
+        disp_str = "FILE_OVERWRITE_IF"
+        info = 3 # FILE_OVERWRITTEN
+    elif disp == 5:
+        disp_str = "FILE_OVERWRITE_IF"
+        info = 2 # FILE_CREATED
+    ctx.setu64(iosb, 0, isemu)
+    ctx.setu64(iosb+8, info, isemu)
+
+    objinfo = (h, name, disp, driverctx, isemu)
+    handles[h] = objinfo
+
+    ctx.doRet(0, isemu)
+
+    print(f"IoCreateFileEx: {name} {disp_str} = {h})")
+
+    return HookRet.STOP_INS
+
+def ZwClose_hook(hook, ctx, addr, sz, op, isemu):
+    h = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+    name = handles[h][1]
+    del handles[h]
+    print(f"Closed File {h} ({name})")
+    return HookRet.DONE_INS
+
+def ZwWriteFile_hook(hook, ctx, addr, sz, op, isemu):
+    h = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+    evt = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+    apcrou = ctx.getRegVal(ctx.api.registers.r8, isemu)
+    apcctx = ctx.getRegVal(ctx.api.registers.r9, isemu)
+    sp = ctx.getRegVal(ctx.api.registers.rsp, isemu)
+    iosb = ctx.getu64(sp + 0x28 + (0 * 8), isemu)
+    buf = ctx.getu64(sp + 0x28 + (0 * 8), isemu)
+    blen = ctx.getu32(sp + 0x28 + (0 * 8), isemu)
+    poff = ctx.getu64(sp + 0x28 + (0 * 8), isemu)
+
+    if apcrou != 0:
+        print("ZwWriteFile with apcroutine!")
+        return HookRet.FORCE_STOP_INS
+
+    ctx.setu64(iosb, 0, isemu)
+    ctx.setu64(iosb+8, blen, isemu)
+
+    off = 0
+    if poff != 0:
+        off = ctx.getu64(poff, isemu)
+
+    ctx.doRet(0, isemu)
+
+    print(f"ZwWriteFile: {h}({name})) {hex(blen)} bytes{(' at offset ' + hex(off)) if poff != 0 else ''}")
+    ctx.printMem(buf, blen)
+
+    return HookRet.STOP_INS
+
+def ZwReadFile_hook(hook, ctx, addr, sz, op, isemu):
+    pass #TODO
+
+def ZwFlushBuffersFile_hook(hook, ctx, addr, sz, op, isemu):
+    iosb = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+    ctx.setu64(iosb, 0, isemu)
+    ctx.setu64(iosb+8, 0, isemu)
+
+    ctx.doRet(0, isemu)
+
+    return HookRet.DONE_INS
+
 def setNtosThunkHook(ctx, name, dostop):
     ctx.setApiHandler(name, ctx.createThunkHook(name, "ntoskrnl.exe", dostop), "ignore", True)
 
@@ -251,6 +364,9 @@ def registerWinHooks(ctx):
     ctx.setApiHandler("RtlDuplicateUnicodeString", RtlDuplicateUnicodeString_hook, "ignore", True)
     ctx.setApiHandler("ExAllocatePoolWithTag", ExAllocatePoolWithTag_hook, "ignore", True)
     ctx.setApiHandler("ExFreePoolWithTag", ExFreePoolWithTag_hook, "ignore", True)
+    ctx.setApiHandler("IoCreateFileEx", IoCreateFileEx_hook, "ignore", True)
+    ctx.setApiHandler("ZwClose", ZwClose_hook, "ignore", True)
+    
     setNtosThunkHook(ctx, "ExSystemTimeToLocalTime", False)
     setNtosThunkHook(ctx, "RtlTimeToTimeFields", False)
     setNtosThunkHook(ctx, "_stricmp", True)

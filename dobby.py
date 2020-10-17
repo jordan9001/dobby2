@@ -241,6 +241,17 @@ class Dobby:
         # add annotation for the API_FUNC area
         self.apihooks = self.addAnn(apihookarea, apihookarea, "API_HOOKS", False, "API HOOKS")
 
+        # set modes appropriately
+        self.api.setMode(MODE.ALIGNED_MEMORY, False)
+        self.api.setMode(MODE.AST_OPTIMIZATIONS, True)
+        self.api.setMode(MODE.CONCRETIZE_UNDEFINED_REGISTERS, False)
+        self.api.setMode(MODE.CONSTANT_FOLDING, True)
+        self.api.setMode(MODE.ONLY_ON_SYMBOLIZED, True)
+        self.api.setMode(MODE.ONLY_ON_TAINTED, False)
+        self.api.setMode(MODE.PC_TRACKING_SYMBOLIC, False)
+        self.api.setMode(MODE.SYMBOLIZE_INDEX_ROTATION, False)
+        self.api.setMode(MODE.TAINT_THROUGH_POINTERS, False)
+
     def printBounds(self):
         for b in self.bounds:
             print(hex(b[0]),'-',hex(b[1]))
@@ -305,6 +316,14 @@ class Dobby:
 
     def printStack(self, amt=0x60, isemu=False):
         self.printRegMem(self.api.registers.rsp, amt, isemu)
+
+    def printQMem(self, addr, amt=12, isemu=False):
+        if not self.inBounds(addr, amt*8):
+            print("Warning, OOB memory")
+        for i in range(amt):
+            a = addr + (8*i)
+            v = self.getu64(a, isemu)
+            print(hex(a)[2:]+':', hex(v)[2:])
 
     def printMap(self):
         mp = [ x for x in self.ann if (x.end - x.start) != 0 ]
