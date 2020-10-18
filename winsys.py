@@ -128,6 +128,13 @@ def readUnicodeStr(ctx, addr, isemu):
     b = ctx.getMemVal(ptr, l, isemu)
     return str(b, "UTF_16_LE")
 
+def setIRQL(ctx, newlevel, isemu):
+    oldirql = ctx.getRegVal(ctx.api.registers.cr8)
+    #TODO save old one at offset from gs see KeRaiseIrqlToDpcLevel
+    ctx.setRegVal(ctx.api.registers.cr8, newlevel, isemu)
+    return oldirql
+#TODO
+
 #TODO more helper stuff
 
 #TODO add windows kernel api hooks here
@@ -138,14 +145,9 @@ def readUnicodeStr(ctx, addr, isemu):
 """
 BCryptDestroyHash
 BCryptCloseAlgorithmProvider
-KeIpiGenericCall
 __C_specific_handler
-_stricmp
 ZwReadFile
-ZwWriteFile
-ZwFlushBuffersFile
 ZwQuerySystemInformation
-KeAreAllApcsDisabled
 KeInitializeApc
 KeInsertQueueApc
 KeBugCheckEx
@@ -154,6 +156,7 @@ KeBugCheckEx
 poolAllocations = [] # see ExAllocatePoolWithTag
 handles = {} # number : (object,)
 nexthandle = 1
+dostops = False
 
 def ExAllocatePoolWithTag_hook(hook, ctx, addr, sz, op, isemu):
     #TODO actually have an allocator? Hope they don't do this a lot
@@ -169,8 +172,7 @@ def ExAllocatePoolWithTag_hook(hook, ctx, addr, sz, op, isemu):
     print("ExAllocatePoolWithTag", hex(amt), tag, '=', hex(area))
 
     ctx.doRet(area, isemu)
-    return HookRet.STOP_INS
-    #return HookRet.DONE_INS
+    return HookRet.STOP_INS if dostops else HookRet.DONE_INS
 
 def ExFreePoolWithTag_hook(hook, ctx, addr, sz, op, isemu):
     #TODO actually do this?
@@ -180,8 +182,7 @@ def ExFreePoolWithTag_hook(hook, ctx, addr, sz, op, isemu):
     print("ExFreePoolWithTag", hex(area))
 
     ctx.doRet(area, isemu)
-    return HookRet.STOP_INS
-    #return HookRet.DONE_INS
+    return HookRet.STOP_INS if dostops else HookRet.DONE_INS
 
 def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
     # check nothing is symbolized
@@ -241,11 +242,12 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
         ctx.setu16(dst + 0x2, numbytes, isemu)
         ctx.setu64(dst + 0x8, dstbuf, isemu)
 
+    s = str(srcval, "UTF_16_LE")
+
     ctx.doRet(0, isemu)
 
-    #return HookRet.DONE_INS
-    print("DEBUG: Did RtlDuplicateUnicodeString")
-    return HookRet.STOP_INS
+    print(f"RtlDuplicateUnicodeString : \"{s}\"")
+    return HookRet.STOP_INS if dostops else HookRet.DONE_INS
 
 def IoCreateFileEx_hook(hook, ctx, addr, sz, op, isemu):
     global nexthandle
@@ -314,7 +316,8 @@ def ZwClose_hook(hook, ctx, addr, sz, op, isemu):
     name = handles[h][1]
     del handles[h]
     print(f"Closed File {h} ({name})")
-    return HookRet.DONE_INS
+    ctx.doRet(0, isemu)
+    return HookRet.STOP_INS if dostops else HookRet.DONE_INS
 
 def ZwWriteFile_hook(hook, ctx, addr, sz, op, isemu):
     h = ctx.getRegVal(ctx.api.registers.rcx, isemu)
@@ -323,39 +326,194 @@ def ZwWriteFile_hook(hook, ctx, addr, sz, op, isemu):
     apcctx = ctx.getRegVal(ctx.api.registers.r9, isemu)
     sp = ctx.getRegVal(ctx.api.registers.rsp, isemu)
     iosb = ctx.getu64(sp + 0x28 + (0 * 8), isemu)
-    buf = ctx.getu64(sp + 0x28 + (0 * 8), isemu)
-    blen = ctx.getu32(sp + 0x28 + (0 * 8), isemu)
-    poff = ctx.getu64(sp + 0x28 + (0 * 8), isemu)
+    buf = ctx.getu64(sp + 0x28 + (1 * 8), isemu)
+    blen = ctx.getu32(sp + 0x28 + (2 * 8), isemu)
+    poff = ctx.getu64(sp + 0x28 + (3 * 8), isemu)
 
     if apcrou != 0:
         print("ZwWriteFile with apcroutine!")
         return HookRet.FORCE_STOP_INS
 
-    ctx.setu64(iosb, 0, isemu)
-    ctx.setu64(iosb+8, blen, isemu)
+    name = handles[h][1]
 
     off = 0
     if poff != 0:
         off = ctx.getu64(poff, isemu)
 
+    ctx.setu64(iosb, 0, isemu)
+    ctx.setu64(iosb+8, blen, isemu)
     ctx.doRet(0, isemu)
 
     print(f"ZwWriteFile: {h}({name})) {hex(blen)} bytes{(' at offset ' + hex(off)) if poff != 0 else ''}")
     ctx.printMem(buf, blen)
 
-    return HookRet.STOP_INS
+    return HookRet.STOP_INS if dostops else HookRet.DONE_INS
 
 def ZwReadFile_hook(hook, ctx, addr, sz, op, isemu):
     pass #TODO
 
 def ZwFlushBuffersFile_hook(hook, ctx, addr, sz, op, isemu):
+    h = ctx.getRegVal(ctx.api.registers.rcx, isemu)
     iosb = ctx.getRegVal(ctx.api.registers.rdx, isemu)
     ctx.setu64(iosb, 0, isemu)
     ctx.setu64(iosb+8, 0, isemu)
 
+    print(f"ZwFlushBuffersFile {h}")
     ctx.doRet(0, isemu)
 
     return HookRet.DONE_INS
+
+def KeAreAllApcsDisabled_hook(hook, ctx, addr, sz, op, isemu):
+    # checks:
+    # currentthread.SpecialAcpDisable
+    # KeAreInterruptsEnabled (IF in rflags)
+    # cr8 == 0
+    #TODO do all the above checks
+    cr8val = ctx.getRegVal(ctx.api.registers.cr8, isemu)
+    ie = ((ctx.getRegVal(ctx.api.registers.eflags, isemu) >> 9) & 1)
+    
+    ret = 0 if cr8val == 0 and ie == 1 else 1
+    print(f"KeAreAllApcsDisabled : {ret}")
+    ctx.doRet(ret, isemu)
+    return HookRet.DONE_INS
+
+def KeIpiGenericCall_hook(hook, ctx, addr, sz, op, isemu):
+    raise NotImplementedError("Need to do this next")
+    fcn = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+    pc = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+    # set IRQL to IPI_LEVEL
+    old_level = setIRQL(ctx, 0xe, isemu)
+    # do IpiGeneric Call
+        #TODO
+    # set hook for when we finish
+    def finish_KeIpiGenericCall_hook(hook, ctx, addr, sz, op, isemu):
+        #TODO
+    print(f"KeIpiGenericCall {hex(dst)}"
+
+def createThunkHooks(ctx):
+    name = "ExSystemTimeToLocalTime" 
+    symaddr0 = ctx.getSym(name, "ntoskrnl.exe")
+    def ExSystemTimeToLocalTime_hook(hook, ctx, addr, sz, op, isemu):
+        ctx.setRegVal(ctx.api.registers.rip, symaddr0, isemu)
+        print("ExSystemTimeToLocalTime")
+        return HookRet.DONE_INS
+    ctx.setApiHandler(name, ExSystemTimeToLocalTime_hook, "ignore", True)
+
+    name = "RtlTimeToTimeFields"
+    symaddr1 = ctx.getSym(name, "ntoskrnl.exe")
+    def RtlTimeToTimeFields_hook(hook, ctx, addr, sz, op, isemu):
+        ctx.setRegVal(ctx.api.registers.rip, symaddr1, isemu)
+        print("RtlTimeToTimeFields")
+        return HookRet.DONE_INS
+    ctx.setApiHandler(name, RtlTimeToTimeFields_hook, "ignore", True)
+
+    name = "_stricmp"
+    symaddr2 = ctx.getSym(name, "ntoskrnl.exe")
+    def _stricmp_hook(hook, ctx, addr, sz, op, isemu):
+        ctx.setRegVal(ctx.api.registers.rip, symaddr2, isemu)
+        s1addr = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+        s2addr = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+        s1 = ctx.getCStr(s1addr, isemu)
+        s2 = ctx.getCStr(s2addr, isemu)
+        print(f"_stricmp \"{s1}\" vs \"{s2}\"")
+        return HookRet.STOP_INS if dostops else HookRet.DONE_INS
+    ctx.setApiHandler(name, _stricmp_hook, "ignore", True)
+
+    name = "wcscat_s"
+    symaddr3 = ctx.getSym(name, "ntoskrnl.exe")
+    def wcscat_s_hook(hook, ctx, addr, sz, op, isemu):
+        ctx.setRegVal(ctx.api.registers.rip, symaddr3, isemu)
+        s1addr = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+        s2addr = ctx.getRegVal(ctx.api.registers.r8, isemu)
+        num = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+        s1 = ctx.getCWStr(s1addr, isemu)
+        s2 = ctx.getCWStr(s2addr, isemu)
+        print(f"wcscat_s ({num}) \"{s1}\" += \"{s2}\"")
+        return HookRet.STOP_INS if dostops else HookRet.DONE_INS
+    ctx.setApiHandler(name, wcscat_s_hook, "ignore", True)
+
+    name = "wcscpy_s"
+    symaddr4 = ctx.getSym(name, "ntoskrnl.exe")
+    def wcscpy_s_hook(hook, ctx, addr, sz, op, isemu):
+        ctx.setRegVal(ctx.api.registers.rip, symaddr4, isemu)
+        dst = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+        src = ctx.getRegVal(ctx.api.registers.r8, isemu)
+        num = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+        s = ctx.getCWStr(src, isemu)
+        print(f"wcscpy_s {hex(dst)[2:]}({num}) <= \"{s}\"")
+        return HookRet.STOP_INS if dostops else HookRet.DONE_INS
+    ctx.setApiHandler(name, wcscpy_s_hook, "ignore", True)
+
+    name = "RtlInitUnicodeString"
+    symaddr5 = ctx.getSym(name, "ntoskrnl.exe")
+    def RtlInitUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
+        ctx.setRegVal(ctx.api.registers.rip, symaddr5, isemu)
+        src = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+        s = ctx.getCWStr(src, isemu)
+        print(f"RtlInitUnicodeString \"{s}\"")
+        return HookRet.STOP_INS if dostops else HookRet.DONE_INS
+    ctx.setApiHandler(name, RtlInitUnicodeString_hook, "ignore", True)
+
+    name = "swprintf_s"
+    symaddr6 = ctx.getSym(name, "ntoskrnl.exe")
+    def swprintf_s_hook(hook, ctx, addr, sz, op, isemu):
+        ctx.setRegVal(ctx.api.registers.rip, symaddr6, isemu)
+        buf = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+        fmt = ctx.getRegVal(ctx.api.registers.r8, isemu)
+        fmts = ctx.getCWStr(fmt, isemu)
+        # set hook for after return
+        sp = ctx.getRegVal(ctx.api.registers.rsp, isemu)
+        retaddr = ctx.getu64(sp, isemu)
+        def finish_swprintf_s_hook(hook, ctx, addr, sz, op, isemu):
+            # remove self
+            ctx.delHook(hook)
+            s = ctx.getCWStr(buf, isemu)
+            print(f"Finished swprintf_s: \"{s}\" from \"{fmts}\"")
+            return HookRet.STOP_INS if dostops else HookRet.CONT_INS
+        ctx.addHook(retaddr, retaddr+1, "e", handler=finish_swprintf_s_hook, ub=False, label="", andemu=True)
+        return HookRet.DONE_INS
+    ctx.setApiHandler(name, swprintf_s_hook, "ignore", True)
+
+    name = "vswprintf_s"
+    symaddr7 = ctx.getSym(name, "ntoskrnl.exe")
+    def vswprintf_s_hook(hook, ctx, addr, sz, op, isemu):
+        ctx.setRegVal(ctx.api.registers.rip, symaddr7, isemu)
+        buf = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+        fmt = ctx.getRegVal(ctx.api.registers.r8, isemu)
+        fmts = ctx.getCWStr(fmt, isemu)
+        # set hook for after return
+        sp = ctx.getRegVal(ctx.api.registers.rsp, isemu)
+        retaddr = ctx.getu64(sp, isemu)
+        def finish_vswprintf_s_hook(hook, ctx, addr, sz, op, isemu):
+            # remove self
+            ctx.delHook(hook)
+            s = ctx.getCWStr(buf, isemu)
+            print(f"Finished vswprintf_s: \"{s}\" from \"{fmts}\"")
+            return HookRet.STOP_INS if dostops else HookRet.CONT_INS
+        ctx.addHook(retaddr, retaddr+1, "e", handler=finish_vswprintf_s_hook, ub=False, label="", andemu=True)
+        return HookRet.DONE_INS
+    ctx.setApiHandler(name, vswprintf_s_hook, "ignore", True)
+
+    name = "_vsnwprintf"
+    symaddr8 = ctx.getSym(name, "ntoskrnl.exe")
+    def _vsnwprintf_hook(hook, ctx, addr, sz, op, isemu):
+        ctx.setRegVal(ctx.api.registers.rip, symaddr8, isemu)
+        buf = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+        fmt = ctx.getRegVal(ctx.api.registers.r8, isemu)
+        fmts = ctx.getCWStr(fmt, isemu)
+        # set hook for after return
+        sp = ctx.getRegVal(ctx.api.registers.rsp, isemu)
+        retaddr = ctx.getu64(sp, isemu)
+        def finish__vsnwprintf_s_hook(hook, ctx, addr, sz, op, isemu):
+            # remove self
+            ctx.delHook(hook)
+            s = ctx.getCWStr(buf, isemu)
+            print(f"Finished _vsnwprintf_s: \"{s}\" from \"{fmts}\"")
+            return HookRet.STOP_INS if dostops else HookRet.CONT_INS
+        ctx.addHook(retaddr, retaddr+1, "e", handler=finish__vsnwprintf_s_hook, ub=False, label="", andemu=True)
+        return HookRet.DONE_INS
+    ctx.setApiHandler(name, _vsnwprintf_hook, "ignore", True)
+
 
 def setNtosThunkHook(ctx, name, dostop):
     ctx.setApiHandler(name, ctx.createThunkHook(name, "ntoskrnl.exe", dostop), "ignore", True)
@@ -366,16 +524,12 @@ def registerWinHooks(ctx):
     ctx.setApiHandler("ExFreePoolWithTag", ExFreePoolWithTag_hook, "ignore", True)
     ctx.setApiHandler("IoCreateFileEx", IoCreateFileEx_hook, "ignore", True)
     ctx.setApiHandler("ZwClose", ZwClose_hook, "ignore", True)
+    ctx.setApiHandler("ZwWriteFile", ZwWriteFile_hook, "ignore", True)
+    ctx.setApiHandler("ZwFlushBuffersFile", ZwFlushBuffersFile_hook, "ignore", True)
+    ctx.setApiHandler("KeAreAllApcsDisabled", KeAreAllApcsDisabled_hook, "ignore", True)
     
-    setNtosThunkHook(ctx, "ExSystemTimeToLocalTime", False)
-    setNtosThunkHook(ctx, "RtlTimeToTimeFields", False)
-    setNtosThunkHook(ctx, "_stricmp", True)
-    setNtosThunkHook(ctx, "wcscat_s", True)
-    setNtosThunkHook(ctx, "wcscpy_s", True)
-    setNtosThunkHook(ctx, "RtlInitUnicodeString", True)
-    setNtosThunkHook(ctx, "swprintf_s", True)
-    setNtosThunkHook(ctx, "vswprintf_s", True)
-    setNtosThunkHook(ctx, "_vsnwprintf", True)
+    #TODO actually have a hook that prints info for all of these
+    createThunkHooks(ctx)
 
 def loadNtos(ctx, base=0xfffff8026be00000):
     # NOTE just because we load ntos doesn't mean it is initialized at all

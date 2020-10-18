@@ -89,13 +89,13 @@ class SavedState:
         self.regs = [] # (regname, value)
 
         for r in ctx.regtrans:
-            self.regs.append((r.getName(), ctx.getRegVal(r, isemu)))
+            self.regs.append((r.getName(), ctx.getRegVal(r, isemu, allowsymb=True)))
 
         # save memory values
         for b in ctx.bounds:
             sz = b[1] - b[0]
             addr = b[0]
-            val = ctx.getMemVal(addr, sz, isemu)
+            val = ctx.getMemVal(addr, sz, isemu, allowsymb=True)
             cval = zlib.compress(val, 6)
             self.mem.append((addr, sz, self.COMP_ZLIB, cval))
             
@@ -256,7 +256,9 @@ class Dobby:
         for b in self.bounds:
             print(hex(b[0]),'-',hex(b[1]))
 
-    def printAst(self, ast, tabbed=4):
+    def printAst(self, ast, simp=True, tabbed=4):
+        if simp:
+            ast = self.api.simplify(ast, True)
         print(taboutast(str(ast)))
 
     def printReg(self, reg, isemu=False, simp=True):
@@ -266,10 +268,7 @@ class Dobby:
             s = self.api.getSymbolicRegister(reg)
             if s is not None:
                 ast = s.getAst()
-                if simp:
-                    ast = self.api.simplify(ast, True)
-                #TODO print ast with HEX and optional tabbing of args
-                print(ast)
+                self.printAst(ast, simp)
                 return
         # concrete value
         print(hex(self.getRegVal(reg, isemu)))
@@ -441,8 +440,8 @@ class Dobby:
                 break
             addr += 2
 
-            mem.append(c)
-        return bytes(mem)
+            mem += c
+        return str(bytes(mem), "UTF_16_LE")
 
     def disass(self, addr=-1, count=16, isemu=False):
         if addr == -1:
@@ -450,10 +449,12 @@ class Dobby:
         #TODO
         raise NotImplementedError("TODO")
 
-    def getRegVal(self, reg, isemu=False):
+    def getRegVal(self, reg, isemu=False, *, allowsymb=False):
         if isemu:
             return self.emu.reg_read(self.regtrans[reg])
         else:
+            if not allowsymb and self.api.isRegisterSymbolized(reg):
+                raise ValueError(f"Attempted to get value from a symbolized register ({reg.getName()})")
             return self.api.getConcreteRegisterValue(reg)
 
     def setRegVal(self, reg, val, isemu=False):
@@ -462,10 +463,14 @@ class Dobby:
         else:
             self.api.setConcreteRegisterValue(reg, val)
 
-    def getMemVal(self, addr, amt, isemu=False):
+    def getMemVal(self, addr, amt, isemu=False, *, allowsymb=False):
         if isemu:
             return self.emu.mem_read(addr, amt)
         else:
+            if not allowsymb:
+                for i in range(amt):
+                    if self.api.isMemorySymbolized(MemoryAccess(addr+i, 1)):
+                        raise ValueError("Attempted to get value from symbolized memory")
             return self.api.getConcreteMemoryAreaValue(addr, amt)
 
     def getRegMemVal(self, reg, amt, isemu=False):
@@ -629,7 +634,7 @@ class Dobby:
         # also create an API to setup args for filter/handler, do state save, etc
         #TODO
 
-    def addHook(self, start, end, htype, handler=None, ub=False, label="", andemu=False):
+    def addHook(self, start, end, htype, handler=None, ub=False, label="", andemu=True):
         # handler takes 4 args, (hook, addr, sz, op, isemu)
         # handler returns True to be a breakpoint, False to continue execution
         emuhandler = None
@@ -642,6 +647,8 @@ class Dobby:
             emuhandler = self.noopemuhook
         h = Hook(start, end, label, handler, emuhandler)
         added = False
+        if 'a' in htype:
+            htype += 'erw'
         if 'e' in htype:
             added = True
             self.hooks[0].append(h)
@@ -658,6 +665,17 @@ class Dobby:
             self.updateBounds(start, end)
         
         return h
+
+    def delHook(self, hook, htype="a"):
+        if 'a' in htype:
+            htype += 'erw'
+
+        if 'e' in htype and hook in self.hooks[0]:
+            self.hooks[0].remove(hook)
+        if 'r' in htype and hook in self.hooks[1]:
+            self.hooks[1].remove(hook)
+        if 'w' in htype and hook in self.hooks[2]:
+            self.hooks[2].remove(hook)
     
     def doRet(self, retval=0, isemu=False):
         self.setRegVal(self.api.registers.rax, retval, isemu)
@@ -881,13 +899,16 @@ class Dobby:
         for r in self.api.getAllRegisters():
             n = r.getName()
             sym = False
-            if n.startswith("cr") or n in ["gs", "fs"]:
+            if n == "cr8":
+                sym=False 
+            elif n.startswith("cr") or n in ["gs", "fs"]:
                 sym = True
 
             if sym and symbolizeControl:
                 self.api.symbolizeRegister(r, "Inital " + n)
             else:
                 self.api.setConcreteRegisterValue(r, 0)
+
         # setup rflags to be sane
         self.api.setConcreteRegisterValue(
             self.api.registers.eflags,
@@ -896,8 +917,8 @@ class Dobby:
             (1 << 21) # support cpuid
         )
 
-        # setup sane control registers instead of symbolizing them all?
-        #TODO
+        # setup sane control registers
+        self.setRegVal(self.api.registers.cr8, 0) # IRQL of 0 (PASSIVE_LEVEL)
 
         # create stack
         stackstart = stackbase - (0x1000 * 16)
