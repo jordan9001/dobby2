@@ -7,6 +7,9 @@ from dobby import *
 from triton import *
 
 # windows kernel helper functions
+def createIrq(ctx, irqtype, inbuf):
+    raise NotImplementedError("TODO")
+
 def createDrvObj(ctx, start, size, entry, path, name="DriverObj"):
     dobjsz = 0x150
     d = ctx.alloc(dobjsz)

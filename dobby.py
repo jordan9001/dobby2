@@ -88,6 +88,7 @@ class SavedState:
         self.mem = [] # (start_addr, uncompressed_size, compression_type, bytes)
         self.regs = [] # (regname, value)
 
+        #TODO save multiple context's
         for r in ctx.regtrans:
             self.regs.append((r.getName(), ctx.getRegVal(r, isemu, allowsymb=True)))
 
@@ -891,6 +892,7 @@ class Dobby:
         return start
 
     def initState(self, start, end, stackbase=0, priv=0, symbolizeControl=True):
+        #TODO be able to initalize/track multiple contexts
         self.priv = (priv == 0)
         if stackbase == 0:
             stackbase = 0xffffb98760000000 if self.priv else 0x64f000
