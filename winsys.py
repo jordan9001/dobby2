@@ -310,7 +310,7 @@ def IoCreateFileEx_hook(hook, ctx, addr, sz, op, isemu):
 
     ctx.doRet(0, isemu)
 
-    print(f"IoCreateFileEx: {name} {disp_str} = {h})")
+    print(f"IoCreateFileEx: \"{name}\" {disp_str} = {h}")
 
     return HookRet.STOP_INS
 
@@ -390,8 +390,9 @@ def KeIpiGenericCall_hook(hook, ctx, addr, sz, op, isemu):
         #TODO
     # set hook for when we finish
     def finish_KeIpiGenericCall_hook(hook, ctx, addr, sz, op, isemu):
+        pass
         #TODO
-    print(f"KeIpiGenericCall {hex(dst)}"
+    print(f"KeIpiGenericCall {hex(dst)}")
 
 def createThunkHooks(ctx):
     name = "ExSystemTimeToLocalTime" 
@@ -474,7 +475,7 @@ def createThunkHooks(ctx):
             print(f"Finished swprintf_s: \"{s}\" from \"{fmts}\"")
             return HookRet.STOP_INS if dostops else HookRet.CONT_INS
         ctx.addHook(retaddr, retaddr+1, "e", handler=finish_swprintf_s_hook, ub=False, label="", andemu=True)
-        return HookRet.DONE_INS
+        return HookRet.STOP_INS if dostops else HookRet.DONE_INS
     ctx.setApiHandler(name, swprintf_s_hook, "ignore", True)
 
     name = "vswprintf_s"
@@ -494,7 +495,7 @@ def createThunkHooks(ctx):
             print(f"Finished vswprintf_s: \"{s}\" from \"{fmts}\"")
             return HookRet.STOP_INS if dostops else HookRet.CONT_INS
         ctx.addHook(retaddr, retaddr+1, "e", handler=finish_vswprintf_s_hook, ub=False, label="", andemu=True)
-        return HookRet.DONE_INS
+        return HookRet.STOP_INS if dostops else HookRet.DONE_INS
     ctx.setApiHandler(name, vswprintf_s_hook, "ignore", True)
 
     name = "_vsnwprintf"
@@ -514,7 +515,7 @@ def createThunkHooks(ctx):
             print(f"Finished _vsnwprintf_s: \"{s}\" from \"{fmts}\"")
             return HookRet.STOP_INS if dostops else HookRet.CONT_INS
         ctx.addHook(retaddr, retaddr+1, "e", handler=finish__vsnwprintf_s_hook, ub=False, label="", andemu=True)
-        return HookRet.DONE_INS
+        return HookRet.STOP_INS if dostops else HookRet.DONE_INS
     ctx.setApiHandler(name, _vsnwprintf_hook, "ignore", True)
 
 
@@ -550,63 +551,19 @@ def initSys(ctx):
     shared_data_sz = 0x720
     ctx.addAnn(shared_data_addr, shared_data_addr + shared_data_sz, "GLOBAL", True, "_KUSER_SHARED_DATA.Timers")
 
-    last_inscnt = ctx.inscount
-    last_inscnt_emu = ctx.inscount_emu
-    nrover = 0
-    mrover = 0
-    
-    IPC = 16 # instructions / Cycle
-    F = 3.2  # GigaCycles / Second == Cycles / Nanosecond
-    IPN = IPC * F * 100 # instructions per 100nanosecond
-    IPM = IPN * 10000   # instructions per millisecond
-    NPI = 1.0/IPN
-    TPI = 1.0/IPM
     #TODO verify tick count/time works how you think
     # time is # of 100-nanosecond intervals
     # these numbers aren't actually any good because we hook out a looot of functionality?
     # but eh, if things don't work then use a volatile symbol hook here
 
     def kuser_time_hook(hk, ctx, addr, sz, op, isemu):
-        nonlocal last_inscnt
-        nonlocal last_inscnt_emu
-        nonlocal nrover
-        nonlocal mrover
-        
-        dif = 0
-        if isemu:
-            dif = ctx.inscount_emu - last_inscnt_emu
-            last_inscnt = ctx.inscount_emu
-        else: 
-            dif = ctx.inscount - last_inscnt 
-            last_inscnt = ctx.inscount
-
-        nrover += dif
-        mrover += dif
-
-        if op != "r":
-            print(f"Attempted {op} on kuser timer")
-            return HookRet.STOP_INS
-
-        # get timers at 0x8, 0x14
-        bts = ctx.getMemVal(shared_data_addr + 0x8, 0x18, isemu)
-        it, _, st, _ = struct.unpack("<QIQI", bts)
-        # get tick count at 0x320
-        bts = ctx.getMemVal(shared_data_addr + 0x320, 0xc, isemu)
-        tc, _ = struct.unpack("<QI", bts)
-
-        #TODO update timers based on dif
-        # timers are in 100-ns intervals
-        # tick is in millisecond intervals
-        # ticks account for sleep and hibernation
-
-        ndif = int(nrover * NPI)
-        mdif = int(mrover * TPI)
-        nrover -= ndif * IPN
-        mrover -= mdif * IPM
-        
-        it += ndif
-        st += ndif
-        tc += mdif
+        # InterruptTime is 100ns scale time since start
+        it = ctx.getTicks(isemu)
+        # SystemTime is 100ns scale, as timestamp
+        st = ctx.getTime(isemu)
+        # TickCount is 1ms scale, as ticks update as if interrupts have maximum period?
+        # TODO adjust this?
+        tc = int(it // 10000)
 
         # write the values back
         bts = struct.pack("<QI", tc, tc>>32)
@@ -614,9 +571,12 @@ def initSys(ctx):
         bts = struct.pack("<QIQI", it, it>>32, st, st>>32)
         ctx.setMemVal(shared_data_addr + 0x8, bts, isemu)
 
-        #DEBUG
-        print("Read from a shared timer")
-        #return HookRet.STOP_INS #DEBUG
+        if shared_data_addr + 0x8 <= addr < shared_data_addr + 0x14:
+            print("Read from InterruptTime")
+        if shared_data_addr + 0x14 <= addr < shared_data_addr + 0x20:
+            print("Read from SystemTime")
+        if shared_data_addr + 0x320 <= addr < shared_data_addr + 0x330:
+            print("Read from TickCount")
         return HookRet.CONT_INS
 
     ctx.addHook(shared_data_addr + 0x8, shared_data_addr+0x20, "r", kuser_time_hook, False, "Interrupt and System Time hook", True)

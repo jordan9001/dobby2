@@ -52,14 +52,15 @@ class StepRet(Enum):
     HOOK_EXEC = 1
     HOOK_WRITE = 2
     HOOK_READ = 3
-    HOOK_CB = 4
-    HOOK_ERR = 5
-    PATH_FORKED = 6
-    STACK_FORKED = 7
-    BAD_INS = 8
-    DREF_SYMBOLIC = 9
-    DREF_OOB = 10
-    INTR = 11
+    HOOK_INS = 4
+    HOOK_CB = 5
+    HOOK_ERR = 6
+    PATH_FORKED = 7
+    STACK_FORKED = 8
+    BAD_INS = 9
+    DREF_SYMBOLIC = 10
+    DREF_OOB = 11
+    INTR = 12
 
 class SavedState:
     COMP_NONE = 0
@@ -198,6 +199,10 @@ class Dobby:
         self.api = TritonContext(ARCH.X86_64)
         self.api.enableSymbolicEngine(True)
 
+        self.systemtimestart = 0x1d68ce74d7e4519
+        self.IPC = 16 # instructions / Cycle
+        self.CPN = 3.2  # GigaCycles / Second == Cycles / Nanosecond
+        self.IPN = self.IPC * self.CPN * 100 # instructions per 100nanosecond
         self.printIns = True
         self.lasthook = None
         self.lastins = None
@@ -225,7 +230,12 @@ class Dobby:
 
         # setup hook stuff
         # hooks are for stopping execution, or running handlers
-        self.hooks = [[],[],[]] # e, rw, w
+        self.hooks = [[],[],[]] # e, rw, w, ins
+
+        # inshooks are handlers of the form func(ctx, addr, isemu)
+        self.inshooks = {
+            "rdtsc" : self.rdtscHook
+        }
 
         # setup annotation stuff
         # annotations are for noting things in memory that we track
@@ -247,6 +257,7 @@ class Dobby:
         self.api.setMode(MODE.AST_OPTIMIZATIONS, True)
         self.api.setMode(MODE.CONCRETIZE_UNDEFINED_REGISTERS, False)
         self.api.setMode(MODE.CONSTANT_FOLDING, True)
+        # remove this if you want to backslice
         self.api.setMode(MODE.ONLY_ON_SYMBOLIZED, True)
         self.api.setMode(MODE.ONLY_ON_TAINTED, False)
         self.api.setMode(MODE.PC_TRACKING_SYMBOLIC, False)
@@ -487,6 +498,25 @@ class Dobby:
     def setRegMemVal(self, reg, amt, isemu=False):
         addr = self.getRegVal(reg, isemu)
         self.setMemVal(addr, val, isemu)
+
+    def getIns(self, isemu=False):
+        if isemu:
+            return self.inscount_emu
+        else:
+            return self.inscount
+
+    def getCycles(self, isemu=False):
+        # returns number of cycles like rdtsc would
+        return int(self.getIns(isemu) // self.IPC)
+
+    def getTicks(self, isemu=False):
+        # turns cycles into 100ns ticks
+        return int(self.getCycles(isemu) // self.IPN)
+
+    def getTime(self, isemu=False):
+        # uses getTicks and base time to get a timestamp
+        # 100ns res (/ 10000 to get milliseconds)
+        return self.getTicks() + self.systemtimestart
 
     def getSymbol(self, symname):
         # use name to find symbol with that alias
@@ -757,6 +787,17 @@ class Dobby:
             hk.handler = handler
         if andemu:
             hk.handler_emu = handler
+
+    @staticmethod
+    def rdtscHook(ctx, addr, isemu):
+        cycles = ctx.getCycles(isemu)
+        newrip = ctx.getRegVal(ctx.api.registers.rip, isemu) + 2
+        ctx.setRegVal(ctx.api.registers.rip, newrip)
+        aval = cycles & 0xffffffff
+        dval = (cycles >> 32) & 0xffffffff
+        ctx.setRegVal(ctx.api.registers.rax, aval)
+        ctx.setRegVal(ctx.api.registers.rdx, dval)
+        return HookRet.DONE_INS
 
     def updateBounds(self, start, end):
         insi = 0
@@ -1164,18 +1205,36 @@ class Dobby:
 
         #TODO check ins.isSymbolized?
 
+        self.inscount += 1
+
+        addr = ins.getAddress()
+        if self.trace is not None:
+            if len(self.trace) == 0 or self.trace[-1][0] != addr:
+                self.trace.append((addr, ins.getDisassembly()))
+
+        # check inshooks
+        ins_name = ins.getDisassembly().split()[0]
+        if ins_name in self.inshooks:
+            ihret = self.inshooks[ins_name](self, addr, False)
+            if ihret == HookRet.ERR:
+                return StepRet.HOOK_ERR
+            elif ihret == HookRet.CONT_INS:
+                pass
+            elif ihret == HookRet.DONE_INS:
+                return StepRet.OK
+            elif ihret == HookRet.STOP_INS and not ignorehook:
+                return StepRet.HOOK_INS
+            elif ihret == HookRet.FORCE_STOP_INS:
+                return StepRet.HOOK_INS
+            else:
+                raise ValueError("Unknown return from instruction hook")
+        
+
         # actually do a step
         #TODO how do we detect exceptions like divide by zero?
         # triton just lets divide by zero through
         if not self.api.processing(ins):
             return StepRet.BAD_INS
-
-        self.inscount += 1
-
-        if self.trace is not None:
-            addr = ins.getAddress()
-            if len(self.trace) == 0 or self.trace[-1][0] != addr:
-                self.trace.append((addr, ins.getDisassembly()))
 
         # check if we forked rip
         if self.api.isRegisterSymbolized(ripreg):
