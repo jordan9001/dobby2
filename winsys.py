@@ -205,10 +205,10 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
     dst = ctx.getRegVal(ctx.api.registers.r8, isemu)
 
     # check bounds
-    if not ctx.inBounds(src, 0x10):
+    if not ctx.inBounds(src, 0x10, MEM_READ):
         print("RtlDuplicateUnicodeString: src oob")
         return HookRet.STOP_INS
-    if not ctx.inBounds(dst, 0x10):
+    if not ctx.inBounds(dst, 0x10, MEM_WRITE):
         print("RtlDuplicateUnicodeString: dst oob")
         return HookRet.STOP_INS
 
@@ -219,7 +219,7 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
 
     if numbytes != 0:
         # check buffers
-        if not ctx.inBounds(srcbuf, numbytes):
+        if not ctx.inBounds(srcbuf, numbytes, MEM_READ):
             print("RtlDuplicateUnicodeString: src.buf oob")
             return HookRet.STOP_INS
 
@@ -381,18 +381,32 @@ def KeAreAllApcsDisabled_hook(hook, ctx, addr, sz, op, isemu):
     return HookRet.DONE_INS
 
 def KeIpiGenericCall_hook(hook, ctx, addr, sz, op, isemu):
-    raise NotImplementedError("Need to do this next")
     fcn = ctx.getRegVal(ctx.api.registers.rcx, isemu)
-    pc = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+    arg = ctx.getRegVal(ctx.api.registers.rdx, isemu)
     # set IRQL to IPI_LEVEL
     old_level = setIRQL(ctx, 0xe, isemu)
     # do IpiGeneric Call
-        #TODO
+    ctx.setRegVal(ctx.api.registers.rcx, arg)
+    ctx.setRegVal(ctx.api.registers.rip, fcn)
+    
     # set hook for when we finish
     def finish_KeIpiGenericCall_hook(hook, ctx, addr, sz, op, isemu):
-        pass
-        #TODO
-    print(f"KeIpiGenericCall {hex(dst)}")
+        # remove self
+        ctx.delHook(hook)
+        
+        setIRQL(ctx, old_level, isemu)
+
+        rval = ctx.getRegVal(ctx.api.registers.rax, isemu)
+        print(f"KeIpiGenericCall returned {hex(rval)}")
+        
+        return HookRet.STOP_INS if dostops else HookRet.CONT_INS
+
+    curstack = ctx.getRegVal(ctx.api.registers.rsp, isemu)
+    retaddr = ctx.getu64(curstack, isemu)
+
+    ctx.addHook(retaddr, retaddr+1, "e", handler=finish_KeIpiGenericCall_hook, label="", andemu=True)
+    print(f"KeIpiGenericCall {hex(fcn)} ({hex(arg)})")
+    return HookRet.STOP_INS if dostops else HookRet.DONE_INS
 
 def createThunkHooks(ctx):
     name = "ExSystemTimeToLocalTime" 
@@ -474,7 +488,7 @@ def createThunkHooks(ctx):
             s = ctx.getCWStr(buf, isemu)
             print(f"Finished swprintf_s: \"{s}\" from \"{fmts}\"")
             return HookRet.STOP_INS if dostops else HookRet.CONT_INS
-        ctx.addHook(retaddr, retaddr+1, "e", handler=finish_swprintf_s_hook, ub=False, label="", andemu=True)
+        ctx.addHook(retaddr, retaddr+1, "e", handler=finish_swprintf_s_hook, label="", andemu=True)
         return HookRet.STOP_INS if dostops else HookRet.DONE_INS
     ctx.setApiHandler(name, swprintf_s_hook, "ignore", True)
 
@@ -494,7 +508,7 @@ def createThunkHooks(ctx):
             s = ctx.getCWStr(buf, isemu)
             print(f"Finished vswprintf_s: \"{s}\" from \"{fmts}\"")
             return HookRet.STOP_INS if dostops else HookRet.CONT_INS
-        ctx.addHook(retaddr, retaddr+1, "e", handler=finish_vswprintf_s_hook, ub=False, label="", andemu=True)
+        ctx.addHook(retaddr, retaddr+1, "e", handler=finish_vswprintf_s_hook, label="", andemu=True)
         return HookRet.STOP_INS if dostops else HookRet.DONE_INS
     ctx.setApiHandler(name, vswprintf_s_hook, "ignore", True)
 
@@ -514,7 +528,7 @@ def createThunkHooks(ctx):
             s = ctx.getCWStr(buf, isemu)
             print(f"Finished _vsnwprintf_s: \"{s}\" from \"{fmts}\"")
             return HookRet.STOP_INS if dostops else HookRet.CONT_INS
-        ctx.addHook(retaddr, retaddr+1, "e", handler=finish__vsnwprintf_s_hook, ub=False, label="", andemu=True)
+        ctx.addHook(retaddr, retaddr+1, "e", handler=finish__vsnwprintf_s_hook, label="", andemu=True)
         return HookRet.STOP_INS if dostops else HookRet.DONE_INS
     ctx.setApiHandler(name, _vsnwprintf_hook, "ignore", True)
 
@@ -531,8 +545,8 @@ def registerWinHooks(ctx):
     ctx.setApiHandler("ZwWriteFile", ZwWriteFile_hook, "ignore", True)
     ctx.setApiHandler("ZwFlushBuffersFile", ZwFlushBuffersFile_hook, "ignore", True)
     ctx.setApiHandler("KeAreAllApcsDisabled", KeAreAllApcsDisabled_hook, "ignore", True)
+    ctx.setApiHandler("KeIpiGenericCall", KeIpiGenericCall_hook, "ignore", True)
     
-    #TODO actually have a hook that prints info for all of these
     createThunkHooks(ctx)
 
 def loadNtos(ctx, base=0xfffff8026be00000):
@@ -549,7 +563,8 @@ def initSys(ctx):
     # setup KUSER_SHARED_DATA at 0xFFFFF78000000000
     shared_data_addr = 0xfffff78000000000
     shared_data_sz = 0x720
-    ctx.addAnn(shared_data_addr, shared_data_addr + shared_data_sz, "GLOBAL", True, "_KUSER_SHARED_DATA.Timers")
+    ctx.addAnn(shared_data_addr, shared_data_addr + shared_data_sz, "GLOBAL", "_KUSER_SHARED_DATA")
+    ctx.updateBounds(shared_data_addr, shared_data_addr + shared_data_sz, MEM_READ, False)
 
     #TODO verify tick count/time works how you think
     # time is # of 100-nanosecond intervals
@@ -579,8 +594,8 @@ def initSys(ctx):
             print("Read from TickCount")
         return HookRet.CONT_INS
 
-    ctx.addHook(shared_data_addr + 0x8, shared_data_addr+0x20, "r", kuser_time_hook, False, "Interrupt and System Time hook", True)
-    ctx.addHook(shared_data_addr + 0x320, shared_data_addr+0x32c, "r", kuser_time_hook, False, "Tick Time hook", True)
+    ctx.addHook(shared_data_addr + 0x8, shared_data_addr+0x20, "r", kuser_time_hook, "Interrupt and System Time hook", True)
+    ctx.addHook(shared_data_addr + 0x320, shared_data_addr+0x32c, "r", kuser_time_hook, "Tick Time hook", True)
 
     ctx.api.setConcreteMemoryAreaValue(
         shared_data_addr + 0x0,

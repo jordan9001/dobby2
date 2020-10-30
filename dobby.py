@@ -44,6 +44,13 @@ class HookRet(Enum):
     STOP_INS = 2
     FORCE_STOP_INS = 3 # unlike STOP_INS this one can not be ignored
 
+# Matches Unicorn's permissions values
+MEM_NONE = 0
+MEM_READ = 1
+MEM_WRITE = 2
+MEM_EXECUTE = 4
+MEM_ALL = 7
+
 class StepRet(Enum):
     ERR_STACK_OOB = -3
     ERR_IP_OOB = -2
@@ -94,9 +101,9 @@ class SavedState:
             self.regs.append((r.getName(), ctx.getRegVal(r, isemu, allowsymb=True)))
 
         # save memory values
-        for b in ctx.bounds:
-            sz = b[1] - b[0]
-            addr = b[0]
+        for p in ctx.bounds:
+            addr = p << ctx.pgshft
+            sz = ctx.pgsz
             val = ctx.getMemVal(addr, sz, isemu, allowsymb=True)
             cval = zlib.compress(val, 6)
             self.mem.append((addr, sz, self.COMP_ZLIB, cval))
@@ -140,15 +147,13 @@ class SavedState:
         lastaddr = 0
         if isemu:
             # map mem
-            for b in self.bounds:
+            for p in self.bounds:
+                #TODO page permissions
                 # round to page boundries?
-                start = b[0] & (~ (self.pgsz-1))
-                if lastaddr > start:
-                    start = lastaddr
-                end = (b[1] + (self.pgsz-1)) & (~ (self.pgsz-1))
-                lastaddr = end
-                sz = end - start
-                self.emu.mem_map(start, sz)
+                start = p << ctx.pgshft
+                sz = ctx.pgsz
+                perm = self.bounds[p]
+                self.emu.mem_map(start, sz, perm)
 
         # Load memory values 
         for m in self.mem:
@@ -168,15 +173,6 @@ class SavedState:
         for r in self.regs:
             name, val = r
             ctx.setReg(ctx.nameToReg(name), val, isemu)
-
-        # save memory values
-        for b in ctx.bounds:
-            sz = b[1] - b[0]
-            addr = b[0]
-            val = ctx.getMemVal(addr, sz, isemu)
-            cval = zlib.compress(val, 6)
-            mem.append((addr, sz, self.COMP_ZLIB, cval))
-            
             
 
     def tofile(fname):
@@ -206,12 +202,15 @@ class Dobby:
         self.printIns = True
         self.lasthook = None
         self.lastins = None
-        self.stepcb = None
         self.trace = None
         self.inscount = 0
         self.priv = True
-        self.pgsz = 0x1000
+        self.pgshft = 12
+        self.pgsz = (1 << self.pgshft)
         self.pes = []
+
+        # heap stuff
+        self.nextalloc = 0
 
         # for unicorn emulator
         self.emu = None
@@ -242,15 +241,15 @@ class Dobby:
         self.ann = []
 
         # setup bounds
-        # bounds is for sandboxing areas we haven't setup yet
-        self.bounds = []
+        # bounds is for sandboxing areas we haven't setup yet and tracking permissions
+        self.bounds = {}
 
         # save off types for checking later
         self.type_MemoryAccess = type(MemoryAccess(0,1))
         self.type_Register = type(self.api.registers.rax)
 
         # add annotation for the API_FUNC area
-        self.apihooks = self.addAnn(apihookarea, apihookarea, "API_HOOKS", False, "API HOOKS")
+        self.apihooks = self.addAnn(apihookarea, apihookarea, "API_HOOKS", "API HOOKS")
 
         # set modes appropriately
         self.api.setMode(MODE.ALIGNED_MEMORY, False)
@@ -264,9 +263,19 @@ class Dobby:
         self.api.setMode(MODE.SYMBOLIZE_INDEX_ROTATION, False)
         self.api.setMode(MODE.TAINT_THROUGH_POINTERS, False)
 
+    def perm2Str(self, p):
+        s = ""
+        if p & MEM_READ:
+            s += "r"
+        if p & MEM_WRITE:
+            s += "w"
+        if p & MEM_EXECUTE:
+            s += "x"
+        return s
+
     def printBounds(self):
-        for b in self.bounds:
-            print(hex(b[0]),'-',hex(b[1]))
+        for b in self.getBoundsRegions(True):
+            print(hex(b[0])[2:].zfill(16), '-', hex(b[1])[2:].zfill(16), self.perm2Str(b[2]))
 
     def printAst(self, ast, simp=True, tabbed=4):
         if simp:
@@ -289,7 +298,7 @@ class Dobby:
         self.printReg(self.api.registers.rip, isemu)
 
     def printSymMem(self, addr, amt, stride, simp=True):
-        if not self.inBounds(addr, amt):
+        if not self.inBounds(addr, amt, MEM_NONE):
             print("Warning, OOB memory")
         for i in range(0, amt, stride):
             memast = self.api.getMemoryAst(MemoryAccess(addr+i, stride))
@@ -300,7 +309,7 @@ class Dobby:
             print(memast)
 
     def printMem(self, addr, amt=0x60, isemu=False, simp=True):
-        if not self.inBounds(addr, amt):
+        if not self.inBounds(addr, amt, MEM_NONE):
             print("Warning, OOB memory")
         # read symbolic memory too
         if not isemu:
@@ -329,7 +338,7 @@ class Dobby:
         self.printRegMem(self.api.registers.rsp, amt, isemu)
 
     def printQMem(self, addr, amt=12, isemu=False):
-        if not self.inBounds(addr, amt*8):
+        if not self.inBounds(addr, amt*8, MEM_NONE):
             print("Warning, OOB memory")
         for i in range(amt):
             a = addr + (8*i)
@@ -341,11 +350,11 @@ class Dobby:
         mp.sort(key = lambda x: x.start)
 
         # add bounds areas not covered by ann
-        for b in self.bounds:
+        for p in self.bounds:
             covered = False
             # if b is not contained by any annotation save it
-            s = b[0]
-            e = b[1]
+            s = p << self.pgshft
+            e = s + self.pgsz
             for m in mp:
                 if m.end <= s:
                     continue
@@ -432,7 +441,7 @@ class Dobby:
     def getCStr(self, addr, isemu=False):
         mem = bytearray()
         while True:
-            if not self.inBounds(addr, 1):
+            if not self.inBounds(addr, 1, MEM_READ):
                 raise MemoryError("Tried to read a CStr out of bounds")
             c = self.getMemVal(addr, 1, isemu)[0]
             if c == 0:
@@ -445,7 +454,7 @@ class Dobby:
     def getCWStr(self, addr, isemu=False):
         mem = bytearray()
         while True:
-            if not self.inBounds(addr, 2):
+            if not self.inBounds(addr, 2, MEM_READ):
                 raise MemoryError("Tried to read a CWStr out of bounds")
             c = self.getMemVal(addr, 2, isemu)
             if c == b'\x00\x00':
@@ -576,7 +585,7 @@ class Dobby:
             if e > end:
                 end = e
         
-        if self.inBounds(base, end - base):
+        if self.inBounds(base, end - base, MEM_NONE):
             raise MemoryError(f"Could not load pe {pe.name} at {hex(base)}, because it would clobber existing memory")
 
         self.pes.append(pe)
@@ -589,7 +598,9 @@ class Dobby:
         with open(path, "rb") as fp:
             rawhdr = fp.read(pe.sizeof_headers)
         self.api.setConcreteMemoryAreaValue(base, rawhdr)
-        self.addAnn(base, base+len(rawhdr), "MAPPED_PE_HDR", True, pe.name)
+        self.addAnn(base, base+len(rawhdr), "MAPPED_PE_HDR", pe.name)
+        roundedlen = (len(rawhdr) + (self.pgsz-1)) & (~(self.pgsz-1))
+        self.updateBounds(base, base+roundedlen, MEM_READ, False)
 
         for phdr in pe.sections:
             start = base + phdr.virtual_address
@@ -603,7 +614,16 @@ class Dobby:
             end = (end + 0xfff) & (~0xfff)
             
             #annotate the memory region
-            self.addAnn(start, end, "MAPPED_PE", True, pe.name + '(' + phdr.name + ')')
+            self.addAnn(start, end, "MAPPED_PE", pe.name + '(' + phdr.name + ')')
+            perm = MEM_NONE
+            if phdr.has_characteristic(lief.PE.SECTION_CHARACTERISTICS.MEM_EXECUTE):
+                perm |= MEM_EXECUTE
+            if phdr.has_characteristic(lief.PE.SECTION_CHARACTERISTICS.MEM_READ):
+                perm |= MEM_READ
+            if phdr.has_characteristic(lief.PE.SECTION_CHARACTERISTICS.MEM_WRITE):
+                perm |= MEM_WRITE
+            
+            self.updateBounds(start, end, perm, False)
 
         # do reloactions
         for r in pe.relocations:
@@ -644,15 +664,15 @@ class Dobby:
                 self.api.symbolizeMemory(MemoryAccess(hookaddr, 8), "IAT val from " + pe.name + " for " + name)
 
                 # create execution hook in hook are
-                self.addHook(hookaddr, hookaddr+8, "e", None, False, "IAT entry from " + pe.name + " for " + name, True)
+                self.addHook(hookaddr, hookaddr+8, "e", None, "IAT entry from " + pe.name + " for " + name, True)
 
-        self.updateBounds(self.apihooks.start, self.apihooks.end)
+        self.updateBounds(self.apihooks.start, self.apihooks.end, MEM_ALL, False)
         
         # annotate symbols from image
         for sym in pe.exported_functions:
             if not sym.name:
                 continue
-            self.addAnn(sym.address + base, sym.address + base, "SYMBOL", False, pe.name + "::" + sym.name)
+            self.addAnn(sym.address + base, sym.address + base, "SYMBOL", pe.name + "::" + sym.name)
 
         return pe
 
@@ -665,7 +685,7 @@ class Dobby:
         # also create an API to setup args for filter/handler, do state save, etc
         #TODO
 
-    def addHook(self, start, end, htype, handler=None, ub=False, label="", andemu=True):
+    def addHook(self, start, end, htype, handler=None, label="", andemu=True):
         # handler takes 4 args, (hook, addr, sz, op, isemu)
         # handler returns True to be a breakpoint, False to continue execution
         emuhandler = None
@@ -692,8 +712,6 @@ class Dobby:
 
         if not added:
             raise ValueError(f"Unknown Hook Type {htype}")
-        elif ub:
-            self.updateBounds(start, end)
         
         return h
 
@@ -740,7 +758,7 @@ class Dobby:
             hit_count += 1
             return HookRet.STOP_INS if stops else HookRet.CONT_INS
         
-        self.addHook(addr, addr+sz, op, vshook, False, name + "_VolHook", True)
+        self.addHook(addr, addr+sz, op, vshook, name + "_VolHook", True)
 
     def createThunkHook(self, symname, pename="", dostop=False):
         symaddr = self.getSym(symname, pename)
@@ -799,74 +817,70 @@ class Dobby:
         ctx.setRegVal(ctx.api.registers.rdx, dval)
         return HookRet.DONE_INS
 
-    def updateBounds(self, start, end):
-        insi = 0
-        si = -1
-        ei = -1
-        combine = False
+    def updateBounds(self, start, end, permissions, isemu, overrule=False):
+        if end <= start:
+            raise ValueError("Tried to UpdateBounds with end <= start")
 
-        if start > end:
-            raise ValueError(f"Invalid bounds {start} -> {end}")
+        start = start >> self.pgshft
+        end = (end + (self.pgsz-1)) >> self.pgshft
+        while start < end:
+            if start not in self.bounds:
+                self.bounds[start] = permissions
+            elif not overrule and permissions != self.bounds[start]:
+                raise MemoryError(f"Tried to update bounds with permissions {permissions} when they were already {self.bounds[start]}")
+            start += 1
 
-        # see if it is already in bounds, or starts/ends in a region
-        for bi in range(len(self.bounds)):
-            b = self.bounds[bi]
-            if b[1] < start:
-                insi = bi+1
-            if b[0] <= start <= b[1]:
-                si = bi
-            if b[0] <= end <= b[1]:
-                ei = bi
+        if isemu:
+            self.emu.mem_map(start << self.pgshft, (end - start) << self.pgshft, permissions)
 
-        if si == -1 and ei == -1:
-            # add a new bounds area
-            self.bounds.insert(insi, [start, end])
-        elif si == ei:
-            # we are good already
-            pass
-        elif si == -1:
-            # extend the ei one
-            self.bounds[ei][0] = start
-            combine = True
-        elif ei == -1:
-            # extend the si one
-            self.bounds[si][1] = end
-            combine = True
-        else:
-            # combine two or more entries
-            self.bounds[si][1] = self.bounds[ei][1]
-            combine = True
+    def inBounds(self, addr, sz, access):
+        start = addr >> self.pgshft
+        sz = (sz + (self.pgsz-1)) >> self.pgshft
+        end = (start + sz)
+        
+        while start < end:
+            if start not in self.bounds:
+                return False
+            if access != (access & self.bounds[start]):
+                print("DEBUG Violated Memory Permissions?")
+                return False
+            start += 1
+        return True
 
-        if combine:
-            while insi+1 < len(self.bounds) and self.bounds[insi+1][1] <= self.bounds[insi][1]:
-                del self.bounds[insi+1]
+    def getBoundsRegions(self, withPerm=False):
+        out = []
+        curp = MEM_NONE
+        start = 0
+        last = -1
+        for p in sorted(self.bounds):
+            if last == -1:
+                start = p
+                curp = self.bounds[p]
+            elif p > (last+1) or (withPerm and curp != self.bounds[p]):
+                if withPerm:
+                    out.append((start << self.pgshft, (last+1) << self.pgshft, curp))
+                else:
+                    out.append((start << self.pgshft, (last+1) << self.pgshft))
+                start = p
+                curp = self.bounds[p]
+            last = p
 
-    def getFreeMem(self, start, amt):
-        #TODO binary search
-        prev = start
-        for b in self.bounds:
-            if (prev+amt) <= b[0]:
-                # found spot
-                return (prev, prev+amt)
-            elif b[1] > prev:
-                prev = b[1]
-        return (prev, prev+amt)
-            
+        if start <= last:
+            if withPerm:
+                out.append((start << self.pgshft, (last+1) << self.pgshft, curp))
+            else:
+                out.append((start << self.pgshft, (last+1) << self.pgshft))
 
-    def inBounds(self, addr, sz=1):
-        #TODO binary search
-        for b in self.bounds:
-            if b[1] < (addr+sz):
-                continue
-            if b[0] > addr:
-                break
-            return True
-        return False
+        return out
 
-    def addAnn(self, start, end, mtype, ub=False, label=""):
-        if ub:
-            self.updateBounds(start, end)
+    def getNextFreePage(self, addr):
+        start = addr >> self.pgshft
+        while start in self.bounds:
+            start += 1
 
+        return start << self.pgshft
+
+    def addAnn(self, start, end, mtype, label=""):
         ann = Annotation(start, end, mtype, label)
         #TODO keep annotations sorted?
         self.ann.append(ann)
@@ -885,55 +899,37 @@ class Dobby:
 
         return match[0].start
 
-    def alloc(self, amt, start=0, label="", roundamt=True, isemu=False):
-        if start == 0:
-            start = 0xffff765400000000 if self.priv else 0x660000
+    def alloc(self, amt, isemu=False):
+        if self.nextalloc == 0:
+            self.nextalloc = 0xffff765400000000 if self.priv else 0x660000
+
+        start = self.nextalloc
 
         # round amt up to 0x10 boundry
         amt = (amt+0xf) & (~0xf)
 
-        (start, end) = self.getFreeMem(start, amt)
+        end = start + amt
+        self.nextalloc = end
+
         # if there is already an "ALLOC" annotation, extend it
         allocann = None
         for a in self.ann:
             if a.end == start and a.mtype == "ALLOC":
                 allocann = a
                 allocann.end = end
-                if len(label) > 0:
-                    allocann.label += "and " + label
                 break;
-            #TODO join to trailing ALLOC as well?
         if allocann is None:
-            allocann = Annotation(start, end, "ALLOC", label)
+            allocann = Annotation(start, end, "ALLOC", "allocations")
             self.ann.append(allocann)
             #TODO keep annotations sorted
 
-        self.updateBounds(start, end)
-
-        if isemu:
-            # allocate the memory, needs to be rounded
-            mapstart = start & (~ (self.pgsz-1))
-            mapend = (end + (self.pgsz-1)) & (~ (self.pgsz-1))
-
-            #TODO slow to ask for all regions here?
-            reg_i = self.emu.mem_regions()
-            for r_beg, r_end, _ in reg_i:
-                if mapend < r_beg:
-                    break
-
-                if r_beg <= mapstart <= r_end:
-                    mapstart = (r_end+1)
-                if r_beg < mapend < r_end:
-                    mapend = r_beg
-
-            if mapend > mapstart:
-                print(hex(start), hex(end), hex(mapstart), hex(mapend))
-                self.emu.mem_map(mapstart, mapend-mapstart)
+        self.updateBounds(start, end, MEM_READ | MEM_WRITE, isemu)
 
         return start
 
     def initState(self, start, end, stackbase=0, priv=0, symbolizeControl=True):
         #TODO be able to initalize/track multiple contexts
+        #TODO work in emu mode
         self.priv = (priv == 0)
         if stackbase == 0:
             stackbase = 0xffffb98760000000 if self.priv else 0x64f000
@@ -965,7 +961,9 @@ class Dobby:
 
         # create stack
         stackstart = stackbase - (0x1000 * 16)
-        stackann = self.addAnn(stackstart, stackbase, "STACK", True, "Inital Stack")
+        stackann = self.addAnn(stackstart, stackbase, "STACK", "Inital Stack")
+        self.updateBounds(stackstart, stackbase, MEM_READ | MEM_WRITE, False)
+
         # add guard hook
         def stack_guard_hook(hk, ctx, addr, sz, op, isemu):
             if isemu:
@@ -975,7 +973,7 @@ class Dobby:
             nonlocal stackann
 
             newstart = stackann.start - 0x1000
-            if ctx.inBounds(newstart, 0x1000):
+            if ctx.inBounds(newstart, 0x1000, MEM_NONE):
                 # error, stack ran into something else
                 print(f"Stack overflow! Stack with top at {stackann.start} could not grow")
                 return True
@@ -983,16 +981,16 @@ class Dobby:
             # grow annotation
             stackann.start = newstart
             # grow bounds
-            ctx.updateBounds(newstart, stackann[1])
+            ctx.updateBounds(newstart, stackann[1], MEM_READ | MEM_WRITE, isemu)
             # move the hook
             hk.start = newstart - 0x1000
             hk.end = newstart
             return False
 
-        self.addHook(stackstart - (0x1000), stackstart, "w", stack_guard_hook, False, "Stack Guard", True)
+        self.addHook(stackstart - (0x1000), stackstart, "w", stack_guard_hook, "Stack Guard", True)
 
         # create end hook
-        self.addHook(end, end+1, "e", None, False, "End Hit", True)
+        self.addHook(end, end+1, "e", None, "End Hit", True)
 
         # set initial rip and rsp
         self.api.setConcreteRegisterValue(self.api.registers.rip, start)
@@ -1095,15 +1093,6 @@ class Dobby:
                 return (False, StepRet.OK)
 
     def stepi(self, ins, ignorehook=False):
-        if self.stepcb is not None:
-            ret = self.stepcb(self)
-            if ret == HookRet.FORCE_STOP_INS:
-                return StepRet.HOOK_CB
-            elif ret == HookRet.STOP_INS and not ignorehook:
-                return StepRet.HOOK_CB
-            elif ret == HookRet.DONE_INS:
-                return StepRet.OK
-
         # do pre-step stuff
         self.lasthook = None
         self.lastins = ins
@@ -1116,11 +1105,11 @@ class Dobby:
 
         #TODO add exception raising after possible first_chance stop?
 
-        #TODO enforce page permissions
-        if not self.inBounds(rip, ins.getSize()):
+        # enforce page permissions
+        if not self.inBounds(rip, ins.getSize(), MEM_EXECUTE):
             return StepRet.ERR_IP_OOB
 
-        if not self.inBounds(rsp, 8):
+        if not self.inBounds(rsp, 8, MEM_WRITE):
             return StepRet.ERR_STACK_OOB
 
         # check if rip is at a hooked execution location
@@ -1188,7 +1177,8 @@ class Dobby:
                 size = o.getSize()
 
                 # check access is in bounds
-                if not self.inBounds(addr, size):
+                #TODO could be a write, not a read? check that later?
+                if not self.inBounds(addr, size, MEM_READ):
                     print("DEBUG: oob dref at", hex(addr))
                     return StepRet.DREF_OOB
 
@@ -1344,6 +1334,8 @@ class Dobby:
         #TODO this will go up too much because we get called to much, can we fix that?
         self.inscount_emu += 1
 
+        #TODO do inshooks here
+
     def emu_rwHook(self, emu, access, addr, sz, val, user_data):
         if self.trystop_emu:
             print("In memory hook when we wanted to stop!")
@@ -1450,23 +1442,15 @@ class Dobby:
         self.emu = None
         self.emu = Uc(UC_ARCH_X86, UC_MODE_64)
 
+        mapreg = self.getBoundsRegions(True)
+        for s, e, p in mapreg:
+            self.emu.mem_map(s, e-s, p)
+            
         # copy over memory
-        lastaddr = 0
-        for b in self.bounds:
-            # round to page boundries?
-            start = b[0] & (~ (self.pgsz-1))
-            if lastaddr > start:
-                start = lastaddr
-            end = (b[1] + (self.pgsz-1)) & (~ (self.pgsz-1))
-            lastaddr = end
-            sz = end - start
-            self.emu.mem_map(start, sz)
-
-            mem = self.api.getConcreteMemoryAreaValue(b[0], b[1]-b[0])
-            self.emu.mem_write(b[0], mem)
-
-        # set memory permissions
-        #TODO
+        memreg = self.getBoundsRegions(False)
+        for s, e in memreg:
+            mem = self.api.getConcreteMemoryAreaValue(s, e-s)
+            self.emu.mem_write(s, mem)
 
         # copy over registers
         self.copyRegToEmu()
