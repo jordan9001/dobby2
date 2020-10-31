@@ -233,7 +233,8 @@ class Dobby:
 
         # inshooks are handlers of the form func(ctx, addr, isemu)
         self.inshooks = {
-            "rdtsc" : self.rdtscHook
+            "rdtsc" : self.rdtscHook,
+            "smsw": self.smswHook,
         }
 
         # setup annotation stuff
@@ -550,10 +551,37 @@ class Dobby:
 
         self.api.setConcreteVariableValue(svar, value)
 
-    def hasUnsetSym(self, ast):
+    def getUnsetSym(self, ast, single=True, allSym=False):
         # walk the ast and see if any of the symbols are not in our list
-        #TODO
-        pass
+        # depth first search, stop when we hit the first one
+        symlist = set()
+        path = [ast]
+        while len(path) > 0:
+            cur, path = path[-1], path[:-1]
+            nt = cur.getType()
+            if nt == triton.AST_NODE.VARIABLE:
+                # Found one!
+                symvar = cur.getSymbolicVariable()
+                sym = symvar.getId()
+                if not allSym and sym in self.defsyms:
+                    continue
+
+                if single:
+                    return sym
+                else:
+                    symlist.add(symvar.getId())
+            elif nt == triton.AST_NODE.REFERENCE:
+                # get symexp and continue
+                path.append(cur.getSymbolicExpression().getAst())
+            else:
+                path += cur.getChildren()
+
+            
+
+        if single:
+            return None
+        else:
+            return list(symlist)
 
     def evalReg(self, reg):
         # Use after using setSymbol
@@ -807,7 +835,18 @@ class Dobby:
             hk.handler_emu = handler
 
     @staticmethod
-    def rdtscHook(ctx, addr, isemu):
+    def smswHook(ctx, addr, ins, isemu):
+        cr0val = ctx.getRegVal(ctx.api.registers.cr0, isemu)
+        op = ins.getOperands()[0]
+        if isinstance(op, ctx.type_Register):
+            ctx.setRegVal(op, cr0val, isemu)
+        else:
+            raise NotImplementedError("TODO")
+        
+        return HookRet.DONE_INS
+
+    @staticmethod
+    def rdtscHook(ctx, addr, ins, isemu):
         cycles = ctx.getCycles(isemu)
         newrip = ctx.getRegVal(ctx.api.registers.rip, isemu) + 2
         ctx.setRegVal(ctx.api.registers.rip, newrip)
@@ -938,15 +977,14 @@ class Dobby:
         for r in self.api.getAllRegisters():
             n = r.getName()
             sym = False
-            if n == "cr8":
+            if n in ["cr8", "cr0"]:
                 sym=False 
             elif n.startswith("cr") or n in ["gs", "fs"]:
                 sym = True
 
+            self.api.setConcreteRegisterValue(r, 0)
             if sym and symbolizeControl:
                 self.api.symbolizeRegister(r, "Inital " + n)
-            else:
-                self.api.setConcreteRegisterValue(r, 0)
 
         # setup rflags to be sane
         self.api.setConcreteRegisterValue(
@@ -958,6 +996,23 @@ class Dobby:
 
         # setup sane control registers
         self.setRegVal(self.api.registers.cr8, 0) # IRQL of 0 (PASSIVE_LEVEL)
+
+        cr0val = 0
+        cr0val |= 1 << 0 # Protected Mode
+        cr0val |= 0 << 1 # Monitor Coprocessor
+        cr0val |= 0 << 2 # Emulation Mode
+        cr0val |= 1 << 3 # Task Switched ?
+        cr0val |= 1 << 4 # Extension Type ?
+        cr0val |= 1 << 5 # Numeric Error
+        cr0val |= 1 << 16 # Write Protect
+        cr0val |= 0 << 18 # Alignment Mask
+        cr0val |= 0 << 29 # Not Write-through
+        cr0val |= 0 << 30 # Cache Disable
+        cr0val |= 1 << 31 # Paging Enabled
+
+        self.setRegVal(self.api.registers.cr0, cr0val)
+
+        #TODO set cr4 as well
 
         # create stack
         stackstart = stackbase - (0x1000 * 16)
@@ -1040,6 +1095,7 @@ class Dobby:
 
     def getNextIns(self):
         # rip should never be symbolic when this function is called
+        # Is this check worth it? Slows us down, when we do it after each step anyways
         if self.api.isRegisterSymbolized(self.api.registers.rip):
             #TODO use hasUnsetSym to see if the symbols are already concretized
             # if so, evalReg rip
@@ -1113,7 +1169,7 @@ class Dobby:
             return StepRet.ERR_STACK_OOB
 
         # check if rip is at a hooked execution location
-        for eh in self.hooks[0]:
+        for eh in self.hooks[0]: #TODO be able to search quicker here
             if eh.start <= rip < eh.end:
                 # hooked
                 #TODO multiple hooks at the same location?
@@ -1205,7 +1261,7 @@ class Dobby:
         # check inshooks
         ins_name = ins.getDisassembly().split()[0]
         if ins_name in self.inshooks:
-            ihret = self.inshooks[ins_name](self, addr, False)
+            ihret = self.inshooks[ins_name](self, addr, ins, False)
             if ihret == HookRet.ERR:
                 return StepRet.HOOK_ERR
             elif ihret == HookRet.CONT_INS:
