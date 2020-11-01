@@ -837,6 +837,10 @@ class Dobby:
     @staticmethod
     def smswHook(ctx, addr, ins, isemu):
         cr0val = ctx.getRegVal(ctx.api.registers.cr0, isemu)
+
+        newrip = ctx.getRegVal(ctx.api.registers.rip, isemu) + ins.getSize()
+        ctx.setRegVal(ctx.api.registers.rip, newrip)
+
         op = ins.getOperands()[0]
         if isinstance(op, ctx.type_Register):
             ctx.setRegVal(op, cr0val, isemu)

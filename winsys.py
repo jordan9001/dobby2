@@ -408,6 +408,34 @@ def KeIpiGenericCall_hook(hook, ctx, addr, sz, op, isemu):
     print(f"KeIpiGenericCall {hex(fcn)} ({hex(arg)})")
     return HookRet.STOP_INS if dostops else HookRet.DONE_INS
 
+def ZwQuerySystemInformation_hook(hook, ctx, addr, sz, op, isemu):
+    infoclass = ctx.getRegVal(ctx.api.registers.rcx, isemu)
+    buf = ctx.getRegVal(ctx.api.registers.rdx, isemu)
+    buflen = ctx.getRegVal(ctx.api.registers.r8, isemu)
+    retlenptr = ctx.getRegVal(ctx.api.registers.r9, isemu)
+
+    if infoclass == 0x0b: #SystemModuleInformation
+        # buffer should contain RTL_PROCESS_MODULES structure
+        raise NotImplementedError(f"Unimplemented infoclass SystemModuleInformation in ZwQuerySystemInformation")
+    elif infoclass == 0x4d: #SystemModuleInformationEx
+        # buffer should contain RTL_PROCESS_MODULE_INFORMATION_EX
+        # has to include the module we are emulating
+        # just copy over a good buffer from the computer?
+        # if they actually use the info we are in trouble
+        # actually load in a bunch of modules? :(
+        # might have to support paging in/out if that needs to happen
+        # for now just try a good value
+        # on windows with python you can do:
+        #   retsz = ctypes.c_ulong(0)
+        #   retszptr = ctypes.pointer(retsz)
+        #   ctypes.windll.ntdll.NtQuerySystemInformation(0x4d, 0, 0, retszptr);
+        #   buf = (ctypes.c_byte * retsz)()
+        #   ctypes.windll.ntdll.NtQuerySystemInformation(0x4d, buf, len(buf), retszptr);
+        #   bytes(buf)
+        # TODO provide a good output, but symbolize any real addresses
+    else:
+        raise NotImplementedError(f"Unimplemented infoclass in ZwQuerySystemInformation : {hex(infoclass)}")
+
 def createThunkHooks(ctx):
     name = "ExSystemTimeToLocalTime" 
     symaddr0 = ctx.getSym(name, "ntoskrnl.exe")
