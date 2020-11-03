@@ -23,7 +23,7 @@ def createDrvObj(ctx, start, size, entry, path, name="DriverObj"):
     ctx.api.setConcreteMemoryAreaValue(d + 0x02, struct.pack("<H", dobjsz))
     # DeviceObject = 0
     ctx.api.setConcreteMemoryAreaValue(d + 0x08, struct.pack("<Q", 0x0))
-    
+
     # flags = ??
     #TODO
     ctx.api.symbolizeMemory(MemoryAccess(d+0x10, 8), name+".Flags")
@@ -32,7 +32,7 @@ def createDrvObj(ctx, start, size, entry, path, name="DriverObj"):
     ctx.api.setConcreteMemoryAreaValue(d + 0x18, struct.pack("<Q", start))
     # DriverSize = size
     ctx.api.setConcreteMemoryAreaValue(d + 0x20, struct.pack("<I", size))
-    
+
     # DriverSection = LDR_DATA_TABLE_ENTRY
     # not sure what most of these fields are, so we will see what is used
     # set up DriverSection
@@ -65,7 +65,7 @@ def createDrvObj(ctx, start, size, entry, path, name="DriverObj"):
 
     #ctx.api.symbolizeMemory(MemoryAccess(d+0x28, 8), name+".DriverSection")
     ctx.setu64(d+0x28, dte)
- 
+
     # DriverExtension = dex
     ctx.api.setConcreteMemoryAreaValue(d + 0x30, struct.pack("<Q", dex))
     # DriverName
@@ -167,7 +167,7 @@ def ExAllocatePoolWithTag_hook(hook, ctx, addr, sz, op, isemu):
     pool = ctx.getRegVal(ctx.api.registers.rcx, isemu)
     amt = ctx.getRegVal(ctx.api.registers.rdx, isemu)
     tag = struct.pack("<I", ctx.getRegVal(ctx.api.registers.r8, isemu))
-    
+
     area = ctx.alloc(amt, isemu=isemu)
 
     poolAllocations.append((pool, amt, tag, area))
@@ -227,7 +227,7 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, isemu):
             if not isemu and ctx.api.isMemorySymbolized(MemoryAccess(srcbuf+i, 1)):
                 print("RtlDuplicateUnicodeString: symbolized in src.buf")
                 return HookRet.STOP_INS
-            
+
         srcval = ctx.getMemVal(srcbuf, numbytes, isemu)
 
     if add_nul > 1 or (add_nul == 1 and numbytes != 0):
@@ -280,7 +280,7 @@ def IoCreateFileEx_hook(hook, ctx, addr, sz, op, isemu):
     name = readUnicodeStr(ctx, namep, isemu)
 
     ctx.setu64(phandle, h, isemu)
-    
+
     # set up iosb
     info = 0
     disp_str = ""
@@ -374,7 +374,7 @@ def KeAreAllApcsDisabled_hook(hook, ctx, addr, sz, op, isemu):
     #TODO do all the above checks
     cr8val = ctx.getRegVal(ctx.api.registers.cr8, isemu)
     ie = ((ctx.getRegVal(ctx.api.registers.eflags, isemu) >> 9) & 1)
-    
+
     ret = 0 if cr8val == 0 and ie == 1 else 1
     print(f"KeAreAllApcsDisabled : {ret}")
     ctx.doRet(ret, isemu)
@@ -388,17 +388,17 @@ def KeIpiGenericCall_hook(hook, ctx, addr, sz, op, isemu):
     # do IpiGeneric Call
     ctx.setRegVal(ctx.api.registers.rcx, arg)
     ctx.setRegVal(ctx.api.registers.rip, fcn)
-    
+
     # set hook for when we finish
     def finish_KeIpiGenericCall_hook(hook, ctx, addr, sz, op, isemu):
         # remove self
         ctx.delHook(hook)
-        
+
         setIRQL(ctx, old_level, isemu)
 
         rval = ctx.getRegVal(ctx.api.registers.rax, isemu)
         print(f"KeIpiGenericCall returned {hex(rval)}")
-        
+
         return HookRet.STOP_INS if dostops else HookRet.CONT_INS
 
     curstack = ctx.getRegVal(ctx.api.registers.rsp, isemu)
@@ -433,11 +433,12 @@ def ZwQuerySystemInformation_hook(hook, ctx, addr, sz, op, isemu):
         #   ctypes.windll.ntdll.NtQuerySystemInformation(0x4d, buf, len(buf), retszptr);
         #   bytes(buf)
         # TODO provide a good output, but symbolize any real addresses
+        raise NotImplementedError(f"Unimplemented infoclass SystemModuleInformationEx in ZwQuerySystemInformation")
     else:
         raise NotImplementedError(f"Unimplemented infoclass in ZwQuerySystemInformation : {hex(infoclass)}")
 
 def createThunkHooks(ctx):
-    name = "ExSystemTimeToLocalTime" 
+    name = "ExSystemTimeToLocalTime"
     symaddr0 = ctx.getSym(name, "ntoskrnl.exe")
     def ExSystemTimeToLocalTime_hook(hook, ctx, addr, sz, op, isemu):
         ctx.setRegVal(ctx.api.registers.rip, symaddr0, isemu)
@@ -574,7 +575,7 @@ def registerWinHooks(ctx):
     ctx.setApiHandler("ZwFlushBuffersFile", ZwFlushBuffersFile_hook, "ignore", True)
     ctx.setApiHandler("KeAreAllApcsDisabled", KeAreAllApcsDisabled_hook, "ignore", True)
     ctx.setApiHandler("KeIpiGenericCall", KeIpiGenericCall_hook, "ignore", True)
-    
+
     createThunkHooks(ctx)
 
 def loadNtos(ctx, base=0xfffff8026be00000):

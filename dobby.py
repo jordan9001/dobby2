@@ -83,7 +83,7 @@ class SavedState:
         self.hasann = doann
         self.hashooks = dohooks
         self.hassyms = dosyms
-        
+
         self.ann = None
         if doann:
             self.ann = copy.deepcopy(ctx.ann)
@@ -107,7 +107,7 @@ class SavedState:
             val = ctx.getMemVal(addr, sz, isemu, allowsymb=True)
             cval = zlib.compress(val, 6)
             self.mem.append((addr, sz, self.COMP_ZLIB, cval))
-            
+
         if dosyms:
             # How do we do this for emu?
             raise NotImplementedError("TODO")
@@ -126,7 +126,7 @@ class SavedState:
             # delete all symbols?
             #TODO
             pass
-        
+
         if self.hasann and doann:
             ctx.ann = copy.deepcopy(self.ann)
         elif doann:
@@ -148,14 +148,13 @@ class SavedState:
         if isemu:
             # map mem
             for p in self.bounds:
-                #TODO page permissions
                 # round to page boundries?
                 start = p << ctx.pgshft
                 sz = ctx.pgsz
                 perm = self.bounds[p]
                 self.emu.mem_map(start, sz, perm)
 
-        # Load memory values 
+        # Load memory values
         for m in self.mem:
             addr, sz, comptype, cval = m
 
@@ -173,7 +172,6 @@ class SavedState:
         for r in self.regs:
             name, val = r
             ctx.setReg(ctx.nameToReg(name), val, isemu)
-            
 
     def tofile(fname):
         if not self.setup:
@@ -191,7 +189,7 @@ class SavedState:
 class Dobby:
     def __init__(self, apihookarea=0xffff414100000000):
         print("🤘 Starting Dobby 🤘")
-        
+
         self.api = TritonContext(ARCH.X86_64)
         self.api.enableSymbolicEngine(True)
 
@@ -221,8 +219,15 @@ class Dobby:
         self.ignorehookaddr_emu = -1
         self.trystop_emu = False
         self.regtrans = {}
-        for x in x64KeyRegs:
-            self.regtrans[getattr(self.api.registers, x)] = getattr(unicorn.x86_const, 'UC_X86_REG_' + x.upper())
+        for x in dir(unicorn.x86_const):
+            uni_start = "UC_X86_REG_"
+            if not x.startswith(uni_start):
+                continue
+            rname = x[len(uni_start):].lower()
+            if not hasattr(self.api.registers, rname):
+                continue
+
+            self.regtrans[getattr(self.api.registers, rname)] = getattr(unicorn.x86_const, x)
 
         # id's of symbols we have set a value for
         self.defsyms = set()
@@ -306,7 +311,6 @@ class Dobby:
             if simp:
                 memast = self.api.simplify(memast, True)
             print(hex(addr+i)[2:].zfill(16), end=":  ")
-            #TODO print ast with HEX and optional tabbing of args
             print(memast)
 
     def printMem(self, addr, amt=0x60, isemu=False, simp=True):
@@ -376,12 +380,12 @@ class Dobby:
         mp.sort(key = lambda x: x.start)
 
         print("\n".join([str(x) for x in mp]))
-    
+
     def printEmuMap(self):
         reg_i = self.emu.mem_regions()
         for r_beg, r_end, _ in reg_i:
             print(hex(r_beg) +'-'+ hex(r_end))
-    
+
     def nameToReg(name):
         return getattr(self.ctx.registers, name)
 
@@ -468,8 +472,15 @@ class Dobby:
     def disass(self, addr=-1, count=16, isemu=False):
         if addr == -1:
             addr = self.getRegVal(self.api.registers.rip, isemu)
-        #TODO
-        raise NotImplementedError("TODO")
+
+        out = ""
+        for i in range(count):
+            insbytes = self.getMemVal(addr, 15, isemu)
+            inst = Instruction(addr, insbytes)
+            self.api.disassembly(inst)
+            out += hex(addr)[2:].zfill(16)  + ": " + inst.getDisassembly() + "\n"
+            addr += inst.getSize()
+        return out
 
     def getRegVal(self, reg, isemu=False, *, allowsymb=False):
         if isemu:
@@ -551,7 +562,11 @@ class Dobby:
 
         self.api.setConcreteVariableValue(svar, value)
 
-    def getUnsetSym(self, ast, single=True, allSym=False):
+    def getRegUnsetSym(self, reg, single=True, allSym=False):
+        ast = self.api.getRegisterAst(reg)
+        return self.getUnsetSym(ast, single, allSym)
+
+    def getUnsetSym(self, ast, single=True, allSym=False, followRef=True):
         # walk the ast and see if any of the symbols are not in our list
         # depth first search, stop when we hit the first one
         symlist = set()
@@ -559,7 +574,7 @@ class Dobby:
         while len(path) > 0:
             cur, path = path[-1], path[:-1]
             nt = cur.getType()
-            if nt == triton.AST_NODE.VARIABLE:
+            if nt == AST_NODE.VARIABLE:
                 # Found one!
                 symvar = cur.getSymbolicVariable()
                 sym = symvar.getId()
@@ -570,33 +585,74 @@ class Dobby:
                     return sym
                 else:
                     symlist.add(symvar.getId())
-            elif nt == triton.AST_NODE.REFERENCE:
+            elif nt == AST_NODE.REFERENCE:
                 # get symexp and continue
-                path.append(cur.getSymbolicExpression().getAst())
+                if followRef:
+                    path.append(cur.getSymbolicExpression().getAst())
             else:
                 path += cur.getChildren()
 
-            
 
         if single:
             return None
         else:
             return list(symlist)
 
-    def evalReg(self, reg):
+    def getUnsetCount(self):
+        varcount = {}
+        ses = self.api.getSymbolicExpressions()
+        for k in ses:
+            ast = ses[k].getAst()
+
+            # note, this will only count each variable in this se once
+            unsetvars = self.getUnsetSym(ast, single=False, followRef=False)
+            for uv in unsetvars:
+                if uv not in varcount:
+                    varcount[uv] = 1
+                else:
+                    varcount[uv] += 1
+
+        return varcount
+
+    def printUnsetCount(self):
+        varcount = self.getUnsetCount()
+        #TODO sort
+        for k in sorted(varcount, key=lambda x: varcount[x], reverse=True):
+            print(f"{varcount[k]} for {k} ({self.api.getSymbolicVariable(k)})")
+
+    def evalReg(self, reg, checkUnset=True):
         # Use after using setSymbol
         #TODO use hasUnsetSym to see if it is okay
         if self.api.isRegisterSymbolized(reg):
+            if checkUnset:
+                ast = self.api.getRegisterAst()
+                unsetsym = self.getUnsetSym(ast, True, False)
+                if unsetsym is not None:
+                    print(f"Unable to eval register, relies on unset symbol {unsetsym}")
+                    return False
+
             val = self.api.getSymbolicRegisterValue(reg)
             self.api.setConcreteRegisterValue(reg, val)
+            return True
+        else:
+            print("Unable to eval register, is not symbolized")
+            return False
 
-    def evalMem(self, addr, size):
+    def evalMem(self, addr, size, checkUnset=True):
         # Use after using setSymbol
         #TODO use hasUnsetSym to see if it is okay
-        mem = b""
         for i in range(size):
-            mem += self.api.getSymbolicMemoryValue(MemoryAccess(addr+i, 1))
+            if checkUnset:
+                # doing this for every byte seems like a lot
+                # should probably use bigger getMemoryAst, but that has to be aligned
+                ast = self.api.getMemoryAst(MemoryAccess(addr+i, 1))
+                unsetsym = self.getUnsetSym(ast, True, False)
+                if unsetsym is not None:
+                    print(f"Unable to eval memory at {hex(addr+i)[2:]}, relies on unset symbol {unsetsym}")
+                    return False
+            mem = self.api.getSymbolicMemoryValue(MemoryAccess(addr+i, 1))
             self.api.setConcreteMemoryValue(addr+i, mem)
+        return True
 
     def loadPE(self, path, base, again=False):
         pe = lief.parse(path)
@@ -612,7 +668,7 @@ class Dobby:
             e = base + phdr.virtual_address + phdr.virtual_size
             if e > end:
                 end = e
-        
+
         if self.inBounds(base, end - base, MEM_NONE):
             raise MemoryError(f"Could not load pe {pe.name} at {hex(base)}, because it would clobber existing memory")
 
@@ -640,7 +696,7 @@ class Dobby:
 
             # round end up to page size
             end = (end + 0xfff) & (~0xfff)
-            
+
             #annotate the memory region
             self.addAnn(start, end, "MAPPED_PE", pe.name + '(' + phdr.name + ')')
             perm = MEM_NONE
@@ -650,7 +706,7 @@ class Dobby:
                 perm |= MEM_READ
             if phdr.has_characteristic(lief.PE.SECTION_CHARACTERISTICS.MEM_WRITE):
                 perm |= MEM_WRITE
-            
+
             self.updateBounds(start, end, perm, False)
 
         # do reloactions
@@ -695,7 +751,7 @@ class Dobby:
                 self.addHook(hookaddr, hookaddr+8, "e", None, "IAT entry from " + pe.name + " for " + name, True)
 
         self.updateBounds(self.apihooks.start, self.apihooks.end, MEM_ALL, False)
-        
+
         # annotate symbols from image
         for sym in pe.exported_functions:
             if not sym.name:
@@ -740,7 +796,7 @@ class Dobby:
 
         if not added:
             raise ValueError(f"Unknown Hook Type {htype}")
-        
+
         return h
 
     def delHook(self, hook, htype="a"):
@@ -753,7 +809,7 @@ class Dobby:
             self.hooks[1].remove(hook)
         if 'w' in htype and hook in self.hooks[2]:
             self.hooks[2].remove(hook)
-    
+
     def doRet(self, retval=0, isemu=False):
         self.setRegVal(self.api.registers.rax, retval, isemu)
         sp = self.getRegVal(self.api.registers.rsp, isemu)
@@ -773,19 +829,19 @@ class Dobby:
     def addVolatileSymHook(name, addr, sz, op, stops=False):
         if op != "r":
             raise TypeError("addVolatileSymHook only works with read hooks")
-        
+
         ma = MemoryAccess(addr, sz)
         hit_count = 0
         def vshook(hook, ctx, addr, sz, op, isemu):
             if isemu:
                 return HookRet.STOP_INS if stops else HookRet.CONT_INS
-            
+
             nonlocal hit_count
             # create a new symbol for every hit
             ctx.api.symbolizeMemory(ma, name+hex(hit_count))
             hit_count += 1
             return HookRet.STOP_INS if stops else HookRet.CONT_INS
-        
+
         self.addHook(addr, addr+sz, op, vshook, name + "_VolHook", True)
 
     def createThunkHook(self, symname, pename="", dostop=False):
@@ -828,7 +884,7 @@ class Dobby:
                 andemu = False
             if not overwrite:
                 raise KeyError(f"Tried to set a handler for a API hook that already has a set handler for em for emu")
-                
+
         if doh:
             hk.handler = handler
         if andemu:
@@ -846,7 +902,7 @@ class Dobby:
             ctx.setRegVal(op, cr0val, isemu)
         else:
             raise NotImplementedError("TODO")
-        
+
         return HookRet.DONE_INS
 
     @staticmethod
@@ -880,7 +936,7 @@ class Dobby:
         start = addr >> self.pgshft
         sz = (sz + (self.pgsz-1)) >> self.pgshft
         end = (start + sz)
-        
+
         while start < end:
             if start not in self.bounds:
                 return False
@@ -1262,6 +1318,13 @@ class Dobby:
             if len(self.trace) == 0 or self.trace[-1][0] != addr:
                 self.trace.append((addr, ins.getDisassembly()))
 
+            # every X thousand instructions, check for inf looping ?
+            #if (self.inscount & 0xffff) == 0:
+                #TODO
+                # check for current rip addr in past X instructions
+                # for each of those, backward, check if same loop reaches start of lopp
+                # enforce some minimum loop count required? Over 9000?
+
         # check inshooks
         ins_name = ins.getDisassembly().split()[0]
         if ins_name in self.inshooks:
@@ -1278,7 +1341,7 @@ class Dobby:
                 return StepRet.HOOK_INS
             else:
                 raise ValueError("Unknown return from instruction hook")
-        
+
 
         # actually do a step
         #TODO how do we detect exceptions like divide by zero?
@@ -1346,7 +1409,7 @@ class Dobby:
                 break
 
         return ret
-    
+
     def next(self, ignoreFirst=True):
         # this is just an until next ins if cur ins is call
         i = self.getNextIns()
@@ -1407,7 +1470,7 @@ class Dobby:
             op = "r"
             if access == UC_MEM_WRITE:
                 op = "w"
-            
+
             if op == "r":
                 for rh in self.hooks[1]:
                     if rh.start <= addr < rh.end:
@@ -1443,12 +1506,12 @@ class Dobby:
             emu.emu_stop()
         ret = False
         #TODO why can't I read registers from here?
-        try: 
+        try:
             # handle read / write hooks
             op = "r"
             if access == UC_MEM_WRITE:
                 op = "w"
-            
+
             if op == "r":
                 for rh in self.hooks[1]:
                     if rh.start <= addr < rh.end:
@@ -1491,9 +1554,11 @@ class Dobby:
         self.intrnum_emu = intno
         emu.emu_stop()
         self.trystop_emu = True
-    
+
     def copyRegToEmu(self):
         # use self.regemu dictionary
+        #TODO only do relevant registers here
+        # e.g. dont do rax, eax, ax, al, ah. Just do rax
         for k in self.regtrans:
             val = self.api.getConcreteRegisterValue(k)
             self.emu.reg_write(self.regtrans[k], val)
@@ -1505,7 +1570,7 @@ class Dobby:
         mapreg = self.getBoundsRegions(True)
         for s, e, p in mapreg:
             self.emu.mem_map(s, e-s, p)
-            
+
         # copy over memory
         memreg = self.getBoundsRegions(False)
         for s, e in memreg:
@@ -1514,7 +1579,7 @@ class Dobby:
 
         # copy over registers
         self.copyRegToEmu()
-        
+
         # set up for hooks
         # hook every instruction
         self.emu.hook_add(UC_HOOK_CODE, self.emu_insHook, None, 0, 0xffffffffffffffff)
@@ -1522,7 +1587,13 @@ class Dobby:
         self.emu.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, self.emu_rwHook, None)
         # hook invalid stuff
         self.emu.hook_add(UC_HOOK_MEM_INVALID, self.emu_invalMemHook, None)
-        self.emu.hook_add(UC_HOOK_INSN_INVALID, self.emu_invalInsHook, None)
+
+        #older versions of unicorn don't have this
+        try:
+            self.emu.hook_add(UC_HOOK_INSN_INVALID, self.emu_invalInsHook, None)
+        except:
+            print("Unable to install emulation invalid instruction hook")
+
         self.emu.hook_add(UC_HOOK_INTR, self.emu_intrHook, None)
 
     def step_emu(self, ignoreFirst=True):
@@ -1622,7 +1693,7 @@ def hexdmp(stuff, start=0):
         rowend = min(i+rowlen, len(stuff))
         for ci in range(i, rowend):
             print(stuff[ci:ci+1].hex(), end=(" " if ((ci & (rowlen-1)) != mid) else '-'))
-            
+
         # padding
         empty = rowlen - (rowend - i)
         if empty != 0:
@@ -1658,7 +1729,7 @@ def taboutast(h, ta=2, hexify=True, maxline=90):
             cn = h[i+1]
             end = -1
             # first check if the () of this one will fit in this line
-            
+
             depth = 0
             ii = i+1
             didline = False
@@ -1670,7 +1741,7 @@ def taboutast(h, ta=2, hexify=True, maxline=90):
 
                 if (cl - i) > maxline:
                     break
-                
+
                 if op == -1 or cl < op:
                     if depth <= 0:
                         # at end
@@ -1688,7 +1759,7 @@ def taboutast(h, ta=2, hexify=True, maxline=90):
 
             if end != -1:
                 tl -= 1
- 
+
             # otherwise if it starts with a (_ grab that as the op
             elif cn == '(':
                 assert h[i+2] == '_'
@@ -1705,7 +1776,7 @@ def taboutast(h, ta=2, hexify=True, maxline=90):
 
             out += h[i:end+1]
             i = end
-            
+
             out += '\n' + (tb * tl)
             while (i+1) < len(h) and h[i+1] == ' ':
                 i += 1
@@ -1726,98 +1797,7 @@ def taboutast(h, ta=2, hexify=True, maxline=90):
                 i += 1
         else:
             out += c
-        
+
         i += 1
 
     return out
-
-
-x64KeyRegs = [
-    'cr0',
-    'cr1',
-    'cr10',
-    'cr11',
-    'cr12',
-    'cr13',
-    'cr14',
-    'cr15',
-    'cr2',
-    'cr3',
-    'cr4',
-    'cr5',
-    'cr6',
-    'cr7',
-    'cr8',
-    'cr9',
-    'cs',
-    'dr0',
-    'dr1',
-    'dr2',
-    'dr3',
-    'dr6',
-    'dr7',
-    'ds',
-    'eflags',
-    'es',
-    'fs',
-    'gs',
-    'mm0',
-    'mm1',
-    'mm2',
-    'mm3',
-    'mm4',
-    'mm5',
-    'mm6',
-    'mm7',
-    'mxcsr',
-    'r10',
-    'r11',
-    'r12',
-    'r13',
-    'r14',
-    'r15',
-    'r8',
-    'r9',
-    'rax',
-    'rbp',
-    'rbx',
-    'rcx',
-    'rdi',
-    'rdx',
-    'rip',
-    'rsi',
-    'rsp',
-    'ss',
-    'zmm0',
-    'zmm1',
-    'zmm10',
-    'zmm11',
-    'zmm12',
-    'zmm13',
-    'zmm14',
-    'zmm15',
-    'zmm16',
-    'zmm17',
-    'zmm18',
-    'zmm19',
-    'zmm2',
-    'zmm20',
-    'zmm21',
-    'zmm22',
-    'zmm23',
-    'zmm24',
-    'zmm25',
-    'zmm26',
-    'zmm27',
-    'zmm28',
-    'zmm29',
-    'zmm3',
-    'zmm30',
-    'zmm31',
-    'zmm4',
-    'zmm5',
-    'zmm6',
-    'zmm7',
-    'zmm8',
-    'zmm9',
-]
