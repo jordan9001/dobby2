@@ -85,3 +85,69 @@ def gen_commented_memdmp(dtstr, dbstr):
 
     out += "b\"\"\n"
     return out
+
+
+import ctypes
+
+def QuerySysInfo(infoclass=0x4d)
+    retsz = ctypes.c_ulong(0)
+    retszptr = ctypes.pointer(retsz)
+    ctypes.windll.ntdll.NtQuerySystemInformation(infoclass, 0, 0, retszptr)
+    buf = (ctypes.c_byte * retsz.value)()
+    ctypes.windll.ntdll.NtQuerySystemInformation(infoclass, buf, len(buf), retszptr)
+    return bytes(buf)
+
+def quickhex(chunk):
+    spced = ' '.join([chunk[i:i+1].hex() for i in range(len(chunk))])
+    fourd = '  '.join([spced[i:i+(4*3)] for i in range(0, len(spced), (4*3))])
+    sxtnd = '\n'.join([fourd[i:i+(((4*3)+2)*4)] for i in range(0, len(fourd), (((4*3)+2)*4))])
+    print(sxtnd)
+
+def parseModInfoEx(infobuf):
+    #TODO
+	fmt = "<HHIQQQIIHHHH256sIIQ"
+    off = 0
+    modinfo = []
+    while True:
+        nextoff = struct.unpack("<H", mia[off:off+2])[0]
+        if nextoff == 0:
+            break
+        vals = struct.unpack(fmt, mia[off:off+struct.calcsize(fmt)])
+        (
+            nextoff,
+            pad, pad,
+            section,
+            mapbase,
+            imgbase,
+            imgsz,
+            flags,
+            loadorder,
+            initorder,
+            loadcount,
+            nameoff,
+            pathname,
+            chksum,
+            timedate,
+            defbase,
+        ) = vals
+        pend = pathname.find(b'\x00')
+        if pend != -1:
+            pathname = pathname[:pend]
+        name = pathname[nameoff:]
+        modinfo.append({
+            "Section": section,
+            "MappedBase": mapbase,
+            "ImageBase": imgbase,
+            "ImageSize": imgsz,
+            "Flags": flags,
+            "LoadOrderIndex": loadorder,
+            "InitOrderIndex": initorder,
+            "LoadCount": loadcount,
+            "Name": name,
+            "Path": pathname,
+            "ImageChecksum": chksum,
+            "TimeDataStamp": timedate,
+            "DefaultBase": defbase,
+        })
+        off += nextoff
+	return modinfo

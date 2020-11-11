@@ -1,5 +1,6 @@
 __pycache__/
 target*
+*.bin
 *.sys
 *.i64
 *.exe
@@ -10,3 +11,4 @@ target*
 *.id1
 *.id2
 *.trace
+*.bndb*

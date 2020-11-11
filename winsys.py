@@ -150,7 +150,6 @@ BCryptDestroyHash
 BCryptCloseAlgorithmProvider
 __C_specific_handler
 ZwReadFile
-ZwQuerySystemInformation
 KeInitializeApc
 KeInsertQueueApc
 KeBugCheckEx
@@ -425,13 +424,7 @@ def ZwQuerySystemInformation_hook(hook, ctx, addr, sz, op, isemu):
         # actually load in a bunch of modules? :(
         # might have to support paging in/out if that needs to happen
         # for now just try a good value
-        # on windows with python you can do:
-        #   retsz = ctypes.c_ulong(0)
-        #   retszptr = ctypes.pointer(retsz)
-        #   ctypes.windll.ntdll.NtQuerySystemInformation(0x4d, 0, 0, retszptr);
-        #   buf = (ctypes.c_byte * retsz)()
-        #   ctypes.windll.ntdll.NtQuerySystemInformation(0x4d, buf, len(buf), retszptr);
-        #   bytes(buf)
+        # see side_utils for doing this from python to get example output
         # TODO provide a good output, but symbolize any real addresses
         raise NotImplementedError(f"Unimplemented infoclass SystemModuleInformationEx in ZwQuerySystemInformation")
     else:
