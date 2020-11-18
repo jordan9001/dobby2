@@ -625,7 +625,7 @@ class Dobby:
         #TODO use hasUnsetSym to see if it is okay
         if self.api.isRegisterSymbolized(reg):
             if checkUnset:
-                ast = self.api.getRegisterAst()
+                ast = self.api.getRegisterAst(reg)
                 unsetsym = self.getUnsetSym(ast, True, False)
                 if unsetsym is not None:
                     print(f"Unable to eval register, relies on unset symbol {unsetsym}")
