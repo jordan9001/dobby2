@@ -185,7 +185,8 @@ class SavedState:
     def __repr__(self):
         return f"SaveState({self.name})" 
 
-
+#TODO have this be a shell around multiple providers?
+# or have isemu be a state variable
 class Dobby:
     def __init__(self, apihookarea=0xffff414100000000):
         print("🤘 Starting Dobby 🤘")
@@ -201,6 +202,7 @@ class Dobby:
         self.lasthook = None
         self.lastins = None
         self.trace = None
+        self.tracefull = False
         self.inscount = 0
         self.priv = True
         self.pgshft = 12
@@ -262,8 +264,11 @@ class Dobby:
         self.api.setMode(MODE.AST_OPTIMIZATIONS, True)
         self.api.setMode(MODE.CONCRETIZE_UNDEFINED_REGISTERS, False)
         self.api.setMode(MODE.CONSTANT_FOLDING, True)
+
         # remove this if you want to backslice
         self.api.setMode(MODE.ONLY_ON_SYMBOLIZED, True)
+        #self.api.setMode(MODE.ONLY_ON_SYMBOLIZED, False)
+
         self.api.setMode(MODE.ONLY_ON_TAINTED, False)
         self.api.setMode(MODE.PC_TRACKING_SYMBOLIC, False)
         self.api.setMode(MODE.SYMBOLIZE_INDEX_ROTATION, False)
@@ -852,14 +857,19 @@ class Dobby:
             return HookRet.DONE_INS if not dostop else HookRet.STOP_INS
         return dothunk
 
-    def stopNextHook(self, hook, isemu=False):
+    def stopNextHook(self, hook, count=1, isemu=False):
         oldhandler = hook.handler if not isemu else hook.handler_emu
         def stoponce(hook, ctx, addr, sz, op, isemu):
-            if isemu:
-                hook.handler_emu = oldhandler
+            nonlocal count
+            if count <= 1:
+                if isemu:
+                    hook.handler_emu = oldhandler
+                else:
+                    hook.handler = oldhandler
+                return HookRet.FORCE_STOP_INS
             else:
-                hook.handler = oldhandler
-            return HookRet.FORCE_STOP_INS
+                count -= 1
+                return oldhandler(hook, ctx, addr, sz, op, isemu)
         if isemu:
             hook.handler_emu = stoponce
         else:
@@ -1113,7 +1123,8 @@ class Dobby:
 
         return True
 
-    def startTrace(self, isemu=False):
+    def startTrace(self, getaddrs=False, isemu=False):
+        self.tracefull = getaddrs
         if isemu:
             if self.trace_emu is None:
                 self.trace_emu = []
@@ -1316,7 +1327,13 @@ class Dobby:
         addr = ins.getAddress()
         if self.trace is not None:
             if len(self.trace) == 0 or self.trace[-1][0] != addr:
-                self.trace.append((addr, ins.getDisassembly()))
+                item = None
+                if self.tracefull:
+                    item = (addr, ins.getDisassembly(), [[],[]])
+                else:
+                    item = (addr, ins.getDisassembly())
+                self.trace.append(item)
+                
 
             # every X thousand instructions, check for inf looping ?
             #if (self.inscount & 0xffff) == 0:
@@ -1349,6 +1366,21 @@ class Dobby:
         if not self.api.processing(ins):
             return StepRet.BAD_INS
 
+        if self.trace is not None and self.tracefull:
+            pass
+            #TODO
+            # save off addresses referenced
+
+        # follow up on the write hooks
+        #TODO undo write if need to?
+        if ins.isMemoryWrite():
+            #TODO enforce page permissions
+            #TODO
+            # also what if they wrote to a hooked location on the stack with a push?
+            #TODO
+            pass
+
+
         # check if we forked rip
         if self.api.isRegisterSymbolized(ripreg):
             return StepRet.PATH_FORKED
@@ -1359,15 +1391,6 @@ class Dobby:
         # check if we forked rsp
         if self.api.isRegisterSymbolized(ripreg):
             return StepRet.STACK_FORKED
-
-        # follow up on the write hooks
-        #TODO undo write if need to?
-        if ins.isMemoryWrite():
-            #TODO enforce page permissions
-            #TODO
-            # also what if they wrote to a hooked location on the stack with a push?
-            #TODO
-            pass
 
         return StepRet.OK
 
@@ -1452,7 +1475,12 @@ class Dobby:
 
         if self.trace_emu is not None:
             if len(self.trace_emu) == 0 or self.trace_emu[-1][0] != addr:
-                self.trace_emu.append((addr,))
+                item = None
+                if self.tracefull:
+                    item = (addr, None, [[],[]])
+                else:
+                    item = (addr, )
+                self.trace_emu.append(item)
 
         #TODO this will go up too much because we get called to much, can we fix that?
         self.inscount_emu += 1

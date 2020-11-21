@@ -68,7 +68,7 @@ ctx.api.setConcreteMemoryAreaValue(argv + 0x18 + len(argv0), argv1)
 ctx.api.setConcreteRegisterValue(rdx, argv)
 print("ARGV at", hex(argv))
 
-ctx.startTrace("both")
+ctx.startTrace(isemu="both")
 ctx.copyStateToEmu()
 
 print("ctx prepped for tester.exe")
