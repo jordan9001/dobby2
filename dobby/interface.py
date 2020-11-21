@@ -1,10 +1,26 @@
-from dobby_const import *
+from enum import Enum
+
+"""
+This is the class that all providers must inherit from
+"""
+class DobbyProvider:
+    """
+    This should be the first class inherited from, with the interfaces following in order after
+    """
+    def __init__(self, ctx, name):
+        self.isEmu = issubclass(type(self), DobbyEmu)
+        self.isSym = issubclass(type(self), DobbySym)
+        self.isRegContext = issubclass(type(self), DobbyRegContext)
+        self.isMem = issubclass(type(self), DobbyMem)
+        self.isSnapshot = issubclass(type(self), DobbySnapshot)
+
+        ctx.registerProvider(self, name, True)
 
 """
 These are the interfaces that providers can fill out to work with the Dobby system
 """
 
-class Dobby_Emu:
+class DobbyEmu:
     """
     Emulation interface for providers to fill out
     """ 
@@ -21,6 +37,12 @@ class Dobby_Emu:
     def updateHookHandler(self, labelglob, newhandler):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
+    def insertInstructionHook(self, insname, handler):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function") 
+
+    def lastHook(self):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function") 
+
     def startTrace(self, getdrefs=False):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
@@ -30,20 +52,20 @@ class Dobby_Emu:
     def stopTrace(self):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def step(self, ignoreCurrentHook=True):
+    def step(self, ignoreCurrentHook=True, printIns=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def cont(self, ignoreCurrentHook=True):
+    def cont(self, ignoreCurrentHook=True, printInst=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def until(self, ignoreCurrentHook=True):
+    def until(self, ignoreCurrentHook=True, printInst=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def next(self, ignoreCurrentHook=True):
+    def next(self, ignoreCurrentHook=True, printInst=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
          
 
-class Dobby_Sym:
+class DobbySym:
     """
     Symbolic interface for providers to fill out
     """
@@ -78,7 +100,7 @@ class Dobby_Sym:
     def evalMem(self, addr, size, checkUnset=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
-class Dobby_RegContext:
+class DobbyRegContext:
     """
     Register Read interface for providers to fill out
     """
@@ -89,7 +111,7 @@ class Dobby_RegContext:
     def setRegVal(self, reg, val):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
-class Dobby_Mem:
+class DobbyMem:
     """
     Memory Read interface for providers to fill out
     """
@@ -103,7 +125,7 @@ class Dobby_Mem:
     def setMemVal(self, addr, val):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
-class Dobby_Snapshot:
+class DobbySnapshot:
     """
     State saving and restoring for providers to fill out
     """
