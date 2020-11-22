@@ -148,9 +148,6 @@ class Dobby:
 
         print("\n".join([str(x) for x in mp]))
 
-    def nameToReg(name):
-        #TODO
-
     def getfmt(self, addr, fmt, sz):
         return struct.unpack(fmt, self.getMemVal(addr, sz))[0]
 
@@ -231,6 +228,15 @@ class Dobby:
         return str(bytes(mem), "UTF_16_LE")
 
     def disass(self, addr=-1, count=16):
+        #TODO
+
+    def nameToReg(self, name):
+        #TODO
+
+    def getRegName(self, reg):
+        #TODO
+
+    def getAllReg(self):
         #TODO
 
     def getRegVal(self, reg, *, allowsymb=False):
@@ -410,7 +416,7 @@ class Dobby:
         # also create an API to setup args for filter/handler, do state save, etc
         #TODO
 
-    def addHook(self, start, end, htype, handler=None, label="", andemu=True):
+    def addHook(self, start, end, htype, handler=None, label=""):
         # handler takes 4 args, (hook, addr, sz, op, provider)
         # handler returns True to be a breakpoint, False to continue execution
         #TODO
@@ -449,7 +455,7 @@ class Dobby:
             hit_count += 1
             return HookRet.OP_CONT_INS
 
-        self.addHook(addr, addr+sz, op, vshook, name + "_VolHook", True)
+        self.addHook(addr, addr+sz, op, vshook, name + "_VolHook")
 
     def createThunkHook(self, symname, pename="", dostop=False):
         symaddr = self.getImageSymbol(symname, pename)
@@ -591,10 +597,7 @@ class Dobby:
 
         return start
 
-#TODO inpect under here
-#TODO VERIFY BELOW
-
-    def initState(self, start, end, stackbase=0, priv=0, symbolizeControl=True):
+    def initState(self, start, end, stackbase=0, priv=0):
         #TODO be able to initalize/track multiple contexts
         #TODO work in emu mode
         self.priv = (priv == 0)
@@ -602,28 +605,28 @@ class Dobby:
             stackbase = 0xffffb98760000000 if self.priv else 0x64f000
 
         # zero or symbolize all registers
-        for r in self.api.getAllRegisters():
-            n = r.getName()
+        for r in self.getAllReg():
+            n = self.getRegName(r)
             sym = False
             if n in ["cr8", "cr0"]:
-                sym=False 
+                sym=False
             elif n.startswith("cr") or n in ["gs", "fs"]:
                 sym = True
 
-            self.api.setConcreteRegisterValue(r, 0)
-            if sym and symbolizeControl:
-                self.api.symbolizeRegister(r, "Inital " + n)
+            self.setRegVal(r, 0)
+            if self.issym and sym and symbolizeControl:
+                self.symbolizeRegister(r, "Inital " + n)
 
         # setup rflags to be sane
-        self.api.setConcreteRegisterValue(
-            self.api.registers.eflags,
+        self.setRegVal(
+            DB_X86_R_EFLAGS,
             (1 << 9) | # interrupts enabled
             (priv << 12) | # IOPL
             (1 << 21) # support cpuid
         )
 
         # setup sane control registers
-        self.setRegVal(self.api.registers.cr8, 0) # IRQL of 0 (PASSIVE_LEVEL)
+        self.setRegVal(DB_X86_R_CR8, 0) # IRQL of 0 (PASSIVE_LEVEL)
 
         cr0val = 0
         cr0val |= 1 << 0 # Protected Mode
@@ -638,7 +641,7 @@ class Dobby:
         cr0val |= 0 << 30 # Cache Disable
         cr0val |= 1 << 31 # Paging Enabled
 
-        self.setRegVal(self.api.registers.cr0, cr0val)
+        self.setRegVal(DB_X86_R_CR0, cr0val)
 
         #TODO set cr4 as well
 
@@ -648,10 +651,7 @@ class Dobby:
         self.updateBounds(stackstart, stackbase, MEM_READ | MEM_WRITE, False)
 
         # add guard hook
-        def stack_guard_hook(hk, ctx, addr, sz, op, isemu):
-            if isemu:
-                #TODO
-                raise NotImplementedError("Unimplemented stack growth for emu")
+        def stack_guard_hook(hk, ctx, addr, sz, op, provider):
             # grow the stack, if we can
             nonlocal stackann
 
@@ -664,76 +664,51 @@ class Dobby:
             # grow annotation
             stackann.start = newstart
             # grow bounds
-            ctx.updateBounds(newstart, stackann[1], MEM_READ | MEM_WRITE, isemu)
+            ctx.updateBounds(newstart, stackann[1], MEM_READ | MEM_WRITE, provider)
             # move the hook
             hk.start = newstart - 0x1000
             hk.end = newstart
             return False
 
-        self.addHook(stackstart - (0x1000), stackstart, "w", stack_guard_hook, "Stack Guard", True)
+        self.addHook(stackstart - (0x1000), stackstart, MEM_WRITE, stack_guard_hook, "Stack Guard")
 
         # create end hook
-        self.addHook(end, end+1, "e", None, "End Hit", True)
+        self.addHook(end, end+1, MEM_EXECUTE, None, "End Hit")
 
         # set initial rip and rsp
-        self.api.setConcreteRegisterValue(self.api.registers.rip, start)
-        self.api.setConcreteRegisterValue(self.api.registers.rsp, stackbase - 0x100)
+        self.setRegVal(self.ipreg, start)
+        self.setRegVal(self.spreg, stackbase - 0x100)
 
         return True
 
-    def startTrace(self, getaddrs=False, isemu=False):
-        self.tracefull = getaddrs
-        if isemu:
-            if self.trace_emu is None:
-                self.trace_emu = []
-        if isemu == "both" or not isemu:
-            if self.trace is None:
-                self.trace = []
+    def startTrace(self, getaddrs=False):
+        #TODO
 
-    def stopTrace(self, isemu=False):
-        if isemu == "both":
-            t = (self.trace_emu, self.trace)
-            self.trace_emu = None
-            self.trace = None
-        elif isemu:
-            t = self.trace_emu
-            self.trace_emu = None
-        else:
-            t = self.trace
-            self.trace = None
+    def getTrace(self):
 
-        return t
+    def stopTrace(self):
+        #TODO
 
-    def cmpTraces(self):
+    def cmpTraceAddrs(self, t1, t2):
         # looks like trying to stop execution with ^C can make the trace skip?
-        if len(self.trace_emu) != len(self.trace):
-            print("Traces len differ. Emu:", len(self.trace_emu), "Symb:", len(self.trace))
+        if len(t1) != len(t2):
+            print("Traces len differ ", len(t1), len(t2))
 
-        l = min(len(self.trace_emu), len(self.trace))
+        l = min(len(t1), len(t2))
 
         differ = False
         for i in range(l):
-            emu = self.trace_emu[i]
-            symb = self.trace[i]
-            if (emu[0] != symb[0]):
+            t1i = t1[i]
+            t2i = t2[i]
+            if (t1i[0] != t2i[0]):
                 differ = True
-                print(f"Traces diverge after {i} instructions (emu @ {hex(emu[0])}, symb @ {hex(symb[0])})")
+                print(f"Traces diverge after {i} instructions ( @ {hex(t1[0])}, @ {hex(t2[0])})")
                 break
         if not differ:
             print("Traces match")
 
-    def getNextIns(self):
-        # rip should never be symbolic when this function is called
-        # Is this check worth it? Slows us down, when we do it after each step anyways
-        if self.api.isRegisterSymbolized(self.api.registers.rip):
-            #TODO use hasUnsetSym to see if the symbols are already concretized
-            # if so, evalReg rip
-            raise ValueError("Tried to get instruction with symbolized rip")
-        rip = self.api.getConcreteRegisterValue(self.api.registers.rip)
-        insbytes = self.api.getConcreteMemoryAreaValue(rip, 15)
-        inst = Instruction(rip, insbytes)
-        self.api.disassembly(inst)
-        return inst
+#TODO inpect under here
+#TODO VERIFY BELOW
 
     def handle_hook(self, hk, addr, sz, op, ignorehook, isemu):
         self.lasthook = hk
