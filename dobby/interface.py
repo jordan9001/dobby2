@@ -70,6 +70,12 @@ class DobbySym:
     Symbolic interface for providers to fill out
     """
 
+    def isSymbolizedRegister(self, reg):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
+    def isSymbolizedMemory(self, addr, size):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+    
     def symbolizeRegister(self, reg, name):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
@@ -86,6 +92,9 @@ class DobbySym:
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
     def getMemoryAst(self, reg):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
+    def printAst(self, ast):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
     def getUnsetSym(self, ast, single=True, allSym=False, followRef=True):
@@ -123,6 +132,9 @@ class DobbyMem:
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
     def setMemVal(self, addr, val):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
+    def updateBounds(self, addr, sz, permissions):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
 class DobbySnapshot:
