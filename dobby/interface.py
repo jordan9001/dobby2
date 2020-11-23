@@ -8,13 +8,19 @@ class DobbyProvider:
     This should be the first class inherited from, with the interfaces following in order after
     """
     def __init__(self, ctx, name):
-        self.isEmu = issubclass(type(self), DobbyEmu)
-        self.isSym = issubclass(type(self), DobbySym)
-        self.isRegContext = issubclass(type(self), DobbyRegContext)
-        self.isMem = issubclass(type(self), DobbyMem)
-        self.isSnapshot = issubclass(type(self), DobbySnapshot)
+        self.ctx = ctx
+        self.providerName = name
+
+        self.isEmuProvider = issubclass(type(self), DobbyEmu)
+        self.isSymProvider = issubclass(type(self), DobbySym)
+        self.isRegContextProvider = issubclass(type(self), DobbyRegContext)
+        self.isMemoryProvider = issubclass(type(self), DobbyMem)
+        self.isSnapshotProvider = issubclass(type(self), DobbySnapshot)
 
         ctx.registerProvider(self, name, True)
+
+    def __repr__(self):
+        return f"Dobby Provider {self.providerName}"
 
 """
 These are the interfaces that providers can fill out to work with the Dobby system
@@ -34,7 +40,7 @@ class DobbyEmu:
     def removeHook(self, hook, htype):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def updateHookHandler(self, labelglob, newhandler):
+    def getHooks(self):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
     def insertInstructionHook(self, insname, handler):
@@ -134,7 +140,7 @@ class DobbyMem:
     def setMemVal(self, addr, val):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
-    def updateBounds(self, addr, sz, permissions):
+    def updateBounds(self, start, end, permissions):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
 class DobbySnapshot:

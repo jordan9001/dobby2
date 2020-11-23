@@ -39,12 +39,41 @@ class Dobby:
         self.isreg = False
         self.ismem = False
         self.issnp = False
+        self.active = None
+        self.providers = []
 
         # for now just support x86
         self.spreg = DB_X86_R_RSP
         self.ipreg = DB_X86_R_RIP
         self.pgshf = DB_X86_PGSHF
         self.pgsz = DB_X86_PGSZ
+        self.name2reg = x86name2reg
+        self.reg2name = x86reg2name
+
+    def registerProvider(self, provider, name, activate):
+        print(f"Registering provider {name}")
+        self.providers.append(provider)
+        
+        if activate:
+            if self.active is not None:
+                print("Waring, deactivating previous provider")
+            self.activateProvider(provider)
+
+    def activateProvider(self, provider):
+        self.active = provider
+        self.isemu = provider.isEmuProvider
+        self.issym = provider.isSymProvider
+        self.isreg = provider.isRegContextProvider
+        self.ismem = provider.isMemoryProvider
+        self.issnp = provider.isSnapshotProvider
+
+    def deactivateProvider(self):
+        self.active = None
+        self.isemu = False
+        self.issym = False
+        self.isreg = False
+        self.ismem = False
+        self.issnp = False
 
     def perm2Str(self, p):
         s = ""
@@ -60,8 +89,10 @@ class Dobby:
         for b in self.getBoundsRegions(True):
             print(hex(b[0])[2:].zfill(16), '-', hex(b[1])[2:].zfill(16), self.perm2Str(b[2]))
 
-    def printAst(self, ast, simp=True, tabbed=4):
-        #TODO
+    def printAst(self, ast):
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        self.active.printAst(ast)
 
     def printReg(self, reg):
         print(self.getRegName(reg), end=" = ")
@@ -228,39 +259,65 @@ class Dobby:
         return str(bytes(mem), "UTF_16_LE")
 
     def disass(self, addr=-1, count=16):
-        #TODO
+        if not self.ismem:
+            raise RuntimeError("No memory providers are active")
+        return self.active.disass(addr, count)
 
     def nameToReg(self, name):
-        #TODO
+        name = name.lower()
+        if name not in self.name2reg:
+            raise KeyError(f"{name} is not a valid register name")
+        return self.name2reg(name)
 
     def getRegName(self, reg):
-        #TODO
+        return self.reg2name(reg)
 
     def getAllReg(self):
-        #TODO
+        return list(self.reg2name.keys())
 
     def getRegVal(self, reg, *, allowsymb=False):
-        #TODO
+        if not self.isreg:
+            raise RuntimeError("No register providers are active")
+
+        if self.issym and not allowsymb and self.isSymbolizedRegister():
+            raise ValueError("Tried to get concrete value for a symbolic register")
+
+        return self.active.getRegVal(reg)
 
     def setRegVal(self, reg, val):
-        #TODO
+        if not self.isreg:
+            raise RuntimeError("No register providers are active")
+
+        self.active.setRegVal(reg, val)
 
     def getMemVal(self, addr, amt, *, allowsymb=False):
-        #TODO
+        if not self.ismem:
+            raise RuntimeError("No memory providers are active")
+
+        if self.issym and not allowsymb and self.isSymbolizedMemory():
+            raise ValueError("Tried to get concrete value for a symbolic region of memory")
+
+        self.active.getMemVal(addr, amt)
 
     def getRegMemVal(self, reg, amt):
         addr = self.getRegVal(reg)
         return self.getMemVal(addr, amt)
 
     def setMemVal(self, addr, val):
-        #TODO
+        if not self.ismem:
+            raise RuntimeError("No memory providers are active")
+
+        self.active.setMemVal(addr, val)
 
     def setRegMemVal(self, reg, amt):
         addr = self.getRegVal(reg)
         self.setMemVal(addr, val)
 
     def getInsCount(self):
-        #TODO
+        if not self.isemu:
+            raise RuntimeError("No emulation providers are active")
+
+        return self.active.getInsCount()
 
     def getCycles(self):
         # returns number of cycles like rdtsc would
@@ -276,37 +333,48 @@ class Dobby:
         return self.getTicks() + self.systemtimestart
 
     def getSymbol(self, symname):
-        #TODO
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        return self.active.getSymbol(symname)
 
     def setSymbolVal(self, sym, value, overwrite=False):
-        #TODO
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        return self.active.setSymbolVal(syn, value, overwrite)
 
     def getRegUnsetSym(self, reg, single=True, allSym=False):
         ast = self.getRegisterAst(reg)
         return self.getUnsetSym(ast, single, allSym)
 
     def getUnsetSym(self, ast, single=True, allSym=False, followRef=True):
-        #TODO
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        return self.active.getUnsetSym(ast, single, allSym, followRef)
 
     def getUnsetCount(self):
-        #TODO
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        return self.active.getUnsetCount()
 
     def printUnsetCount(self):
-        #TODO
+        print(self.getUnsetCount())
 
     def evalReg(self, reg, checkUnset=True):
-        #TODO
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        return self.active.evalReg(reg, checkUnset)
 
     def evalMem(self, addr, size, checkUnset=True):
-        #TODO
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        return self.active.evalMem(addr, size, checkUnset)
 
-    def loadPE(self, path, base, again=False):
-        #TODO genericise this
+    def loadPE(self, path, base, again=False, failwarn=True):
         pe = lief.parse(path)
         if pe is None:
             raise FileNotFoundError(f"Unable to parse file {path}")
 
-        if not again and pe.name in [ x.name for x in self.pes ]:
+        if not again and pe.name in [ x.name for x in self.modules ]:
             raise KeyError(f"PE with name {pe.name} already loaded")
 
         # get size, check base doesn't crush existing area
@@ -319,7 +387,7 @@ class Dobby:
         if self.inBounds(base, end - base, MEM_NONE):
             raise MemoryError(f"Could not load pe {pe.name} at {hex(base)}, because it would clobber existing memory")
 
-        self.pes.append(pe)
+        self.modules.append(pe)
 
         dif = base - pe.optional_header.imagebase
 
@@ -328,7 +396,7 @@ class Dobby:
         rawhdr = b""
         with open(path, "rb") as fp:
             rawhdr = fp.read(pe.sizeof_headers)
-        self.api.setConcreteMemoryAreaValue(base, rawhdr)
+        self.setMemVal(base, rawhdr)
         self.addAnn(base, base+len(rawhdr), "MAPPED_PE_HDR", pe.name)
         roundedlen = (len(rawhdr) + (self.pgsz-1)) & (~(self.pgsz-1))
         self.updateBounds(base, base+roundedlen, MEM_READ, False)
@@ -336,7 +404,7 @@ class Dobby:
         for phdr in pe.sections:
             start = base + phdr.virtual_address
             end = start + len(phdr.content)
-            self.api.setConcreteMemoryAreaValue(base + phdr.virtual_address, phdr.content)
+            self.setMemVal(base + phdr.virtual_address, phdr.content)
 
             if (end - start) < phdr.virtual_size:
                 end = start + phdr.virtual_size
@@ -363,6 +431,8 @@ class Dobby:
                 if lastabs:
                     # huh, it wasn't the last one?
                     print(f"Warning, got a ABS relocation that wasn't the last one")
+                    if failwarn:
+                        raise ReferenceError("Bad relocation")
                 if re.type == lief.PE.RELOCATIONS_BASE_TYPES.DIR64:
                     a = re.address
                     val = self.getu64(base + a)
@@ -375,6 +445,8 @@ class Dobby:
                     lastabs = True
                 else:
                     print(f"Warning: PE Loading: Unhandled relocation type {re.type}")
+                    if failwarn:
+                        raise ReferenceError("Bad relocation")
 
         # setup exception handlers
         # actually, we check exception handlers at runtime, in case they change under us
@@ -392,10 +464,12 @@ class Dobby:
                 # really this hook should be in the IAT, if the entry is a pointer to something bigger than 8 bytes
                 #TODO
                 # but for now, we just assume most of these are functions or pointers to something 8 or less bytes large?
-                self.api.symbolizeMemory(MemoryAccess(hookaddr, 8), "IAT val from " + pe.name + " for " + name)
+                if self.issym:
+                    self.symbolizeMemory(hookaddr, 8, "IAT val from " + pe.name + " for " + name)
 
                 # create execution hook in hook are
-                self.addHook(hookaddr, hookaddr+8, "e", None, "IAT entry from " + pe.name + " for " + name, True)
+                h = self.addHook(hookaddr, hookaddr+8, MEM_EXECUTE, None, "IAT entry from " + pe.name + " for " + name)
+                h.isApiHook = True
 
         self.updateBounds(self.apihooks.start, self.apihooks.end, MEM_ALL, False)
 
@@ -407,7 +481,7 @@ class Dobby:
 
         return pe
 
-    def getPEExeHandlers(self, addr):
+    def getExceptionHandlers(self, addr):
         # should return a generator that will walk back over exception handlers
         # generator each time returns (filteraddr, handleraddr)
         #TODO
@@ -418,11 +492,24 @@ class Dobby:
 
     def addHook(self, start, end, htype, handler=None, label=""):
         # handler takes 4 args, (hook, addr, sz, op, provider)
-        # handler returns True to be a breakpoint, False to continue execution
-        #TODO
+        # handler returns a HookRet code that determines how to procede
+        if not self.isemu:
+            raise RuntimeError("No emulator providers are available")
+
+        if (htype & MEM_ALL) == 0:
+            raise ValueError("Hook didn't specify a proper type")
+
+        h = Hook(start, end, htype, label, handler)
+
+        self.active.insertHook(h, htype)
+
+        return h
 
     def delHook(self, hook, htype=MEM_ALL):
-        #TODO
+        if not self.isemu:
+            raise RuntimeError("No emulator providers are available")
+
+        self.active.removeHook(hook, htype)
 
     def doRet(self, retval=0):
         self.setRegVal(DB_X86_R_RAX, retval)
@@ -477,7 +564,22 @@ class Dobby:
         hook.handler = stoponce
 
     def setApiHandler(self, name, handler, overwrite=False):
-        #TODO
+        if not self.isemu:
+            raise RuntimeError("No emulation providers are active")
+
+        hooks = self.active.getHooks()
+        found = [x for x in hooks if x.isApiHook and x.label.endswith("::"+name) and 0 != (x.htype & MEM_EXECUTE)]
+
+        if len(found) != 1:
+            raise KeyError(f"Found {len(found)} hooks that match that name, unable to set handler")
+
+        hk = found[0]
+
+        doh = True
+        if hk.handler is not None and not overwrite:
+            raise KeyError(f"Tried to set a handler for a API hook that already has a set handler")
+
+        hk.handler = handler
 
     @staticmethod
     def rdtscHook(ctx, addr, ins, provider):
@@ -504,6 +606,8 @@ class Dobby:
             start += 1
 
         #TODO call the providers
+        if self.ismem:
+            self.active.updateBounds(start, end, permissions)
 
     def inBounds(self, addr, sz, access):
         start = addr >> self.pgshft
@@ -682,12 +786,22 @@ class Dobby:
         return True
 
     def startTrace(self, getaddrs=False):
-        #TODO
+        if not self.isemu:
+            raise RuntimeError("No emulation providers are active")
+
+        return self.active.startTrace(getaddrs)
 
     def getTrace(self):
+        if not self.isemu:
+            raise RuntimeError("No emulation providers are active")
+
+        return self.active.getTrace()
 
     def stopTrace(self):
-        #TODO
+        if not self.isemu:
+            raise RuntimeError("No emulation providers are active")
+        
+        return self.active.stopTrace()
 
     def cmpTraceAddrs(self, t1, t2):
         # looks like trying to stop execution with ^C can make the trace skip?
@@ -706,27 +820,23 @@ class Dobby:
                 break
         if not differ:
             print("Traces match")
-
-#TODO inpect under here
-#TODO VERIFY BELOW
-
-    def handle_hook(self, hk, addr, sz, op, ignorehook, isemu):
+    
+    #TODO move to EMU interface?
+    def handle_hook(self, hk, addr, sz, op, ignorehook):
         self.lasthook = hk
 
         handler = hk.handler
-        if isemu:
-            handler = hk.handler_emu
 
         stopret = StepRet.HOOK_EXEC
-        if op == "r":
+        if op == MEM_READ:
             stopret = StepRet.HOOK_READ
-        elif op == "w":
+        elif op == MEM_WRITE:
             stopret = StepRet.HOOK_WRITE
-        elif op != "e":
+        elif op != MEM_EXECUTE:
             raise TypeError(f"Unknown op to handler hook \"{op}\"")
 
         if handler is not None:
-            hret = handler(hk, self, addr, sz, op, isemu)
+            hret = handler(hk, self, addr, sz, op, provider)
             
             if hret == HookRet.FORCE_STOP_INS:
                 return (True, stopret)
@@ -750,7 +860,7 @@ class Dobby:
                 return (False, StepRet.OK)
             elif hret == HookRet.DONE_INS:
                 # only applies to exec type hooks
-                if op != "e":
+                if op != MEM_EXECUTE:
                     raise TypeError(f"Hook \"{str(hk)}\" returned done, even though the op type is \"{op}\"")
                 return (True, StepRet.OK)
             elif hret == HookRet.ERR:
@@ -765,28 +875,40 @@ class Dobby:
                 return (False, StepRet.OK)
 
     def step(self, ignorehook=True):
-        #TODO
+        if not self.isemu:
+            raise RuntimeError("No emulation providers are active")
+
+        return self.active.step(ignorehook)
 
     def cont(self, ignoreFirst=True, n=0):
-        #TODO
+        if not self.isemu:
+            raise RuntimeError("No emulation providers are active")
+
+        return self.active.cont(ignorehook)
 
     def until(self, addr, ignoreFirst=True):
-        #TODO
+        if not self.isemu:
+            raise RuntimeError("No emulation providers are active")
+
+        return self.active.until(addr, ignorehook)
 
     def next(self, ignoreFirst=True):
-        #TODO
+        if not self.isemu:
+            raise RuntimeError("No emulation providers are active")
 
-    #TODO check above
+        return self.active.next(ignorehook)
 
 class Hook:
     """
     Hook handlers should have the signature (hook, addr, sz, op, provider)
     """
-    def __init__(self, start, end, label="", handler=None):
+    def __init__(self, start, end, htype, label="", handler=None):
         self.start = start
         self.end = end
         self.label = label
         self.handler = handler
+        self.htype = htype
+        self.isApiHook=False
 
     def __repr__(self):
         return f"Hook @ {hex(self.start)}:\"{self.label}\"{' (no handler)' if self.handler is None else ''}"

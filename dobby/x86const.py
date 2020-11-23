@@ -1,6 +1,6 @@
 # page size
 DB_X86_PGSHFT = 12
-DB_X86_PGSZ   = (1 << self.pgshft)
+DB_X86_PGSZ   = (1 << DB_X86_PGSHFT)
 
 # register values
 DB_X86_R_AC     = 0x1
@@ -284,3 +284,11 @@ DB_X86_R_ZMM6   = 0x116
 DB_X86_R_ZMM7   = 0x117
 DB_X86_R_ZMM8   = 0x118
 DB_X86_R_ZMM9   = 0x119
+
+
+# create Register to Name translation
+regkey = "DB_X86_R_"
+x86name2reg = { x.lower()[len(regkey):] : globals()[x] for x in globals() if x.startswith(regkey) }
+x86reg2name = { x86name2reg[x] : x for x in x86name2reg }
+assert(len(x86reg2name) == len(x86name2reg))
+
