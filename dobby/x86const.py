@@ -287,8 +287,9 @@ DB_X86_R_ZMM9   = 0x119
 
 
 # create Register to Name translation
-regkey = "DB_X86_R_"
-x86name2reg = { x.lower()[len(regkey):] : globals()[x] for x in globals() if x.startswith(regkey) }
+x86regkey = "DB_X86_R_"
+x86allreg = [ globals()[x] for x in globals() if x.startswith(x86regkey) ]
+x86name2reg = { x.lower()[len(regkey):] : globals()[x] for x in x86allreg}
 x86reg2name = { x86name2reg[x] : x for x in x86name2reg }
 assert(len(x86reg2name) == len(x86name2reg))
 

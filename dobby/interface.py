@@ -1,4 +1,4 @@
-from enum import Enum
+from .dobby_const import *
 
 """
 This is the class that all providers must inherit from
@@ -19,6 +19,18 @@ class DobbyProvider:
 
         ctx.registerProvider(self, name, True)
 
+    def activated(self):
+        """
+        Called when provider is activated
+        """
+        pass
+
+    def deactivated(self):
+        """
+        Called when provider is activated
+        """
+        pass
+
     def __repr__(self):
         return f"Dobby Provider {self.providerName}"
 
@@ -29,24 +41,38 @@ These are the interfaces that providers can fill out to work with the Dobby syst
 class DobbyEmu:
     """
     Emulation interface for providers to fill out
+    Maybe Execution interface is a better term
+    Could be implemented by a debugger
     """ 
 
     def getInsCount(self):
+        """
+        Get current instruction count
+        """
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def insertHook(self, hook, htype):
+    def insertedHook(self, hook):
+        """
+        Called when a hook is added
+        Hooks are stored in ctx.hooks
+        But if the provider has to do something on insertion, do it here
+        If the provider is not active when the hook is added, it will not get this call
+        """ 
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def removeHook(self, hook, htype):
-        raise NotImplementedError(f"{str(type(self))} does not implement this function") 
-
-    def getHooks(self):
+    def removedHook(self, hook):
+        """
+        Called when a hook is removed
+        Hooks are stored in ctx.hooks and will be removed after this callback
+        But if the provider has to do something on removal, do it here
+        If the provider is not active when the hook is added, it will not get this call
+        """
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
     def insertInstructionHook(self, insname, handler):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def lastHook(self):
+    def removeInstructionHook(self, insname, handler):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
     def startTrace(self, getdrefs=False):
@@ -64,7 +90,7 @@ class DobbyEmu:
     def cont(self, ignoreCurrentHook=True, printInst=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def until(self, ignoreCurrentHook=True, printInst=True):
+    def until(self, addr, ignoreCurrentHook=True, printInst=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
     def next(self, ignoreCurrentHook=True, printInst=True):
@@ -97,7 +123,7 @@ class DobbySym:
     def getRegisterAst(self, reg):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
-    def getMemoryAst(self, reg):
+    def getMemoryAst(self, addr, size):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
     def printAst(self, ast):

@@ -16,6 +16,10 @@ class Dobby:
         # Stop for OP_STOP_INS
         self.opstop = False
 
+        # hooks that are installed
+        self.hooks = [[], [], []] # Execute, readwrite, write
+        self.lasthook = None
+
         # inshooks are handlers of the form func(ctx, addr, provider)
         self.inshooks = {
             "rdtsc" : self.rdtscHook,
@@ -50,6 +54,8 @@ class Dobby:
         self.name2reg = x86name2reg
         self.reg2name = x86reg2name
 
+        #TODO automatically register providers here?
+
     def registerProvider(self, provider, name, activate):
         print(f"Registering provider {name}")
         self.providers.append(provider)
@@ -67,7 +73,11 @@ class Dobby:
         self.ismem = provider.isMemoryProvider
         self.issnp = provider.isSnapshotProvider
 
+        self.active.activate()
+
     def deactivateProvider(self):
+        self.active.deactivate()
+
         self.active = None
         self.isemu = False
         self.issym = False
@@ -493,23 +503,48 @@ class Dobby:
     def addHook(self, start, end, htype, handler=None, label=""):
         # handler takes 4 args, (hook, addr, sz, op, provider)
         # handler returns a HookRet code that determines how to procede
-        if not self.isemu:
-            raise RuntimeError("No emulator providers are available")
-
         if (htype & MEM_ALL) == 0:
             raise ValueError("Hook didn't specify a proper type")
 
         h = Hook(start, end, htype, label, handler)
 
-        self.active.insertHook(h, htype)
+        added = False
+        if (htype & MEM_ALL) == 0:
+            raise ValueError(f"Unknown Hook Type {htype}")
+
+        if (htype & MEM_EXECUTE) != 0:
+            added = True
+            self.hooks[0].append(h)
+        if (htype & MEM_READ) != 0:
+            added = True
+            self.hooks[1].append(h)
+        if (htype & MEM_WRITE) != 0:
+            added = True
+            self.hooks[2].append(h)
+
+        if self.isemu:
+            self.active.insertHook(h)
+        else:
+            print("Warning, added a hook without a emulation provider active")
 
         return h
 
     def delHook(self, hook, htype=MEM_ALL):
-        if not self.isemu:
-            raise RuntimeError("No emulator providers are available")
+        if self.isemu:
+            self.active.removeHook(hook, htype)
 
-        self.active.removeHook(hook, htype)
+        if (htype & MEM_EXECUTE) != 0:
+            if hook not in self.hooks[0]:
+                raise KeyError(f"Removing {hook} from execute hooks, when it is not in the execute hook list!")
+            self.hooks[0].remove(hook)
+        if (htype & MEM_READ) != 0:
+            if hook not in self.hooks[1]:
+                raise KeyError(f"Removing {hook} from read hooks, when it is not in the read hook list!")
+            self.hooks[1].remove(hook)
+        if (htype & MEM_WRITE) != 0:
+            if hook not in self.hooks[2]:
+                raise KeyError(f"Removing {hook} from write hooks, when it is not in the write hook list!")
+            self.hooks[2].remove(hook)
 
     def doRet(self, retval=0):
         self.setRegVal(DB_X86_R_RAX, retval)
@@ -567,8 +602,7 @@ class Dobby:
         if not self.isemu:
             raise RuntimeError("No emulation providers are active")
 
-        hooks = self.active.getHooks()
-        found = [x for x in hooks if x.isApiHook and x.label.endswith("::"+name) and 0 != (x.htype & MEM_EXECUTE)]
+        found = [x for x in self.hooks if x.isApiHook and x.label.endswith("::"+name) and 0 != (x.htype & MEM_EXECUTE)]
 
         if len(found) != 1:
             raise KeyError(f"Found {len(found)} hooks that match that name, unable to set handler")
@@ -922,40 +956,6 @@ class Annotation:
 
     def __repr__(self):
         return f"{hex(self.start)}-{hex(self.end)}=>\"{self.mtype}:{self.label}\""
-
-class HookRet(Enum):
-    ERR = -1
-    CONT_INS = 0
-    DONE_INS = 1
-    STOP_INS = 2
-    FORCE_STOP_INS = 3 # unlike STOP_INS this one can not be ignored
-    OP_CONT_INST = 4 # This one can optionally be a stop or a continue, depending on ctx.opstop
-    OP_DONE_INST = 4 # This one can optionally be a stop or a done, depending on ctx.opstop
-
-# Matches Unicorn's permissions values
-MEM_NONE = 0
-MEM_READ = 1
-MEM_WRITE = 2
-MEM_EXECUTE = 4
-MEM_ALL = 7
-
-class StepRet(Enum):
-    ERR_STACK_OOB = -3
-    ERR_IP_OOB = -2
-    ERR = -1
-    OK = 0
-    HOOK_EXEC = 1
-    HOOK_WRITE = 2
-    HOOK_READ = 3
-    HOOK_INS = 4
-    HOOK_CB = 5
-    HOOK_ERR = 6
-    PATH_FORKED = 7
-    STACK_FORKED = 8
-    BAD_INS = 9
-    DREF_SYMBOLIC = 10
-    DREF_OOB = 11
-    INTR = 12
 
 def hexdmp(stuff, start=0):
     printable = string.digits + string.ascii_letters + string.punctuation + ' '
