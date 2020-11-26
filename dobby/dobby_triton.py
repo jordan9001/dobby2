@@ -24,13 +24,16 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
         self.api.setMode(MODE.CONSTANT_FOLDING, True)
         # remove this if you want to backslice
         self.api.setMode(MODE.ONLY_ON_SYMBOLIZED, True)
-        # modified Triton to support this so we can manually record some semantics
-        # used for reverse taint analysis with the trace
-        self.api.setMode(MODE.MANUAL_CLEAN_INSTRUCTION, True)
         self.api.setMode(MODE.ONLY_ON_TAINTED, False)
         self.api.setMode(MODE.PC_TRACKING_SYMBOLIC, False)
         self.api.setMode(MODE.SYMBOLIZE_INDEX_ROTATION, False)
         self.api.setMode(MODE.TAINT_THROUGH_POINTERS, False)
+
+        # register callbacks
+        self.addrswritten = []
+        self.addrread = []
+        self.api.addCallback(CALLBACK.GET_CONCRETE_MEMORY_VALUE, self.getMemCallback)
+        self.api.addCallback(CALLBACK.SET_CONCRETE_MEMORY_VALUE, self.setMemCallback)
 
         # save off types for checking later
         self.type_MemoryAccess = type(MemoryAccess(0,1))
@@ -146,9 +149,23 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
         self.api.disassembly(inst)
         return inst
 
+    def setMemCallback(self, trictx, mem, val):
+        addr = mem.getAddress()
+        size = mem.getSize()
+
+        self.addrswritten.append((mem.getAddress(), mem.getSize()))
+
+    def getMemCallback(self, trictx, mem, val):
+        addr = mem.getAddress()
+        size = mem.getSize()
+
+        self.addrsread.append((mem.getAddress, mem.getSize()))
+
     def stepi(self, ins, ignorehook=False):
         # do pre-step stuff
         ctx.lasthook = None
+        self.addrswritten = []
+        self.addrread = []
         self.lastins = ins
 
         # rip and rsp should always be a concrete value at the beginning of this function
@@ -162,9 +179,6 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
         # enforce page permissions
         if not ctx.inBounds(rip, ins.getSize(), MEM_EXECUTE):
             return StepRet.ERR_IP_OOB
-
-        if not ctx.inBounds(rsp, 8, MEM_WRITE):
-            return StepRet.ERR_STACK_OOB
 
         # check if rip is at a hooked execution location
         for eh in ctx.hooks[0]: #TODO be able to search quicker here
@@ -210,53 +224,19 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
                     #TODO check if the register can be concretized here
                     return StepRet.DREF_SYMBOLIC
 
-                # calculate the address with displacement and scale
-                addr = 0
-                if baseregid != 0:
-                    addr += self.api.getConcreteRegisterValue(basereg)
-                    addr &= 0xffffffffffffffff
-
-                if indexregid != 0:
-                    scale = o.getScale().getValue()
-                    addr += (scale * self.api.getConcreteRegisterValue(indexreg))
-                    addr &= 0xffffffffffffffff
-
-                disp = o.getDisplacement().getValue()
-                addr += disp
-                addr &= 0xffffffffffffffff
-                size = o.getSize()
-
-                # check access is in bounds
-                #TODO could be a write, not a read? check that later?
-                if not ctx.inBounds(addr, size, MEM_READ):
-                    print("DEBUG: oob dref at", hex(addr))
-                    return StepRet.DREF_OOB
-
-                # check if access is hooked
-                for rh in ctx.hooks[1]:
-                    if rh.start <= addr < rh.end:
-                        # hooked
-                        #TODO multiple hooks at the same location?
-                        stop, sret = ctx.handle_hook(rh, addr, size, MEM_READ, ignorehook, False)
-                        if not stop:
-                            break
-                        return sret
-                    #TODO check write hooks
-
         #TODO check ins.isSymbolized?
 
         self.inscount += 1
 
-        addr = ins.getAddress()
+        insaddr = ins.getAddress()
         if self.trace is not None:
-            if len(self.trace) == 0 or self.trace[-1][0] != addr:
+            if len(self.trace) == 0 or self.trace[-1][0] != insaddr:
                 item = None
                 if self.tracefull:
-                    item = (addr, ins.getDisassembly(), [[],[]])
+                    item = (insaddr, ins.getDisassembly(), [[],[]])
                 else:
-                    item = (addr, ins.getDisassembly())
+                    item = (insaddr, ins.getDisassembly())
                 self.trace.append(item)
-                
 
         # every X thousand instructions, check for inf looping ?
         #if (self.inscount & 0xffff) == 0:
@@ -268,7 +248,7 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
         # check inshooks
         ins_name = ins.getDisassembly().split()[0]
         if ins_name in ctx.inshooks:
-            ihret = ctx.inshooks[ins_name](self, addr, ins, False)
+            ihret = ctx.inshooks[ins_name](self, insaddr, ins, False)
 
             if ihret == HookRet.OP_CONT_INST:
                 if ctx.opstop:
@@ -301,18 +281,44 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
             return StepRet.BAD_INS
 
         if self.trace is not None and self.tracefull:
-            pass
-            #TODO
-            # save off addresses referenced
+            self.trace[-1][2][0] += self.addrsread
+            self.trace[-1][2][1] += self.addrswritten
 
-        # follow up on the write hooks
-        #TODO undo write if need to?
-        if ins.isMemoryWrite():
-            #enforce page permissions
-            #TODO
-            # also what if they wrote to a hooked location on the stack with a push?
-            #TODO
-            pass
+        #TODO we are doing bounds checks after they already happen
+        # this is a problem if we want to be able to handle exceptions properly
+
+        # Read and Write hooks
+        for addr, size in self.addrsread:
+            # check access is in bounds
+            if not ctx.inBounds(addr, size, MEM_READ):
+                print("DEBUG: oob read at", hex(addr))
+                return StepRet.DREF_OOB
+
+            # check if access is hooked
+            for rh in trictx.ctx.hooks[1]:
+                if (rh.start - size) < addr < rh.end:
+                    # hooked
+                    #TODO multiple hooks at the same location?
+                    stop, sret = ctx.handle_hook(rh, addr, size, MEM_READ, ignorehook, False)
+                    if not stop:
+                        break
+                    return sret
+
+        for addr, size in self.addrswritten:
+            # check access is in bounds
+            if not ctx.inBounds(addr, size, MEM_READ):
+                print("DEBUG: oob write at", hex(addr))
+                return StepRet.DREF_OOB
+
+            # check if access is hooked
+            for wh in trictx.ctx.hooks[2]:
+                if (wh.start - size) < addr < wh.end:
+                    # hooked
+                    #TODO multiple hooks at the same location?
+                    stop, sret = ctx.handle_hook(rh, addr, size, MEM_WRITE, ignorehook, False)
+                    if not stop:
+                        break
+                    return sret
 
         # check if we forked rip
         if self.api.isRegisterSymbolized(ripreg):
