@@ -2,6 +2,7 @@ from .dobby_const import *
 
 class Dobby:
     def __init__(self, apihookarea=0xffff414100000000):
+        print("🤘 Starting Dobby 🤘")
         self.systemtimestart = 0x1d68ce74d7e4519
         self.IPC = 16 # instructions / Cycle
         self.CPN = 3.2  # GigaCycles / Second == Cycles / Nanosecond
