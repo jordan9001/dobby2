@@ -342,6 +342,34 @@ class Dobby:
         # 100ns res (/ 10000 to get milliseconds)
         return self.getTicks() + self.systemtimestart
 
+    def trySymbolizeRegister(self, reg, name):
+        if self.issym:
+            self.symbolizeRegister(reg, name)
+
+    def symbolizeRegister(self, reg, name):
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        self.active.symbolizeRegister(reg, name)
+
+    def trySymbolizeMemory(self, addr, size, name):
+        if self.issym:
+            self.symbolizeMemory(addr, size, name)
+
+    def symbolizeMemory(self, addr, size, name):
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        self.active.symbolizeRegister(addr, size, name)
+
+    def isSymbolizedRegister(self, reg):
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        return self.active.isSymbolizedRegister(reg)
+
+    def isSymbolizedMemory(self, addr, size):
+        if not self.issym:
+            raise RuntimeError("No symbolic providers are active")
+        return self.active.isSymbolizedMemory(addr, size)
+
     def getSymbol(self, symname):
         if not self.issym:
             raise RuntimeError("No symbolic providers are active")

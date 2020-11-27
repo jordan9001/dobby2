@@ -107,7 +107,7 @@ class DobbySym:
 
     def isSymbolizedMemory(self, addr, size):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
-    
+
     def symbolizeRegister(self, reg, name):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
