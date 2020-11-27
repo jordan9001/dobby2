@@ -225,7 +225,7 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, provider):
         ctx.setu64(dst + 0x8, 0)
     else:
         dstbuf = ctx.alloc(len(srcval))
-        ctx.setMemVal(dstbuf,/ srcval)
+        ctx.setMemVal(dstbuf, srcval)
         ctx.setu16(dst + 0x0, numbytes)
         ctx.setu16(dst + 0x2, numbytes)
         ctx.setu64(dst + 0x8, dstbuf)
@@ -452,11 +452,11 @@ def createThunkHooks(ctx):
     symaddr3 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     def wcscat_s_hook(hook, ctx, addr, sz, op, provider):
         ctx.setRegVal(DB_X86_R_RIP, symaddr3)
-        s1addr = ctx.getRegVal(DB_X86_R_RCX)$
-        s2addr = ctx.getRegVal(DB_X86_R_R8)$
-        num = ctx.getRegVal(DB_X86_R_RDX)$
-        s1 = ctx.getCWStr(s1addr)$
-        s2 = ctx.getCWStr(s2addr)$
+        s1addr = ctx.getRegVal(DB_X86_R_RCX)
+        s2addr = ctx.getRegVal(DB_X86_R_R8)
+        num = ctx.getRegVal(DB_X86_R_RDX)
+        s1 = ctx.getCWStr(s1addr)
+        s2 = ctx.getCWStr(s2addr)
         print(f"wcscat_s ({num}) \"{s1}\" += \"{s2}\"")
         return HookRet.OP_DONE_INS
     ctx.setApiHandler(name, wcscat_s_hook, "ignore")
@@ -464,11 +464,11 @@ def createThunkHooks(ctx):
     name = "wcscpy_s"
     symaddr4 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     def wcscpy_s_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr4)$
-        dst = ctx.getRegVal(DB_X86_R_RCX)$
-        src = ctx.getRegVal(DB_X86_R_R8)$
-        num = ctx.getRegVal(DB_X86_R_RDX)$
-        s = ctx.getCWStr(src)$
+        ctx.setRegVal(DB_X86_R_RIP, symaddr4)
+        dst = ctx.getRegVal(DB_X86_R_RCX)
+        src = ctx.getRegVal(DB_X86_R_R8)
+        num = ctx.getRegVal(DB_X86_R_RDX)
+        s = ctx.getCWStr(src)
         print(f"wcscpy_s {hex(dst)[2:]}({num}) <= \"{s}\"")
         return HookRet.OP_DONE_INS
     ctx.setApiHandler(name, wcscpy_s_hook, "ignore")
@@ -476,9 +476,9 @@ def createThunkHooks(ctx):
     name = "RtlInitUnicodeString"
     symaddr5 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     def RtlInitUnicodeString_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr5)$
-        src = ctx.getRegVal(DB_X86_R_RDX)$
-        s = ctx.getCWStr(src)$
+        ctx.setRegVal(DB_X86_R_RIP, symaddr5)
+        src = ctx.getRegVal(DB_X86_R_RDX)
+        s = ctx.getCWStr(src)
         print(f"RtlInitUnicodeString \"{s}\"")
         return HookRet.OP_DONE_INS
     ctx.setApiHandler(name, RtlInitUnicodeString_hook, "ignore")
@@ -486,17 +486,17 @@ def createThunkHooks(ctx):
     name = "swprintf_s"
     symaddr6 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     def swprintf_s_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr6)$
-        buf = ctx.getRegVal(DB_X86_R_RCX)$
-        fmt = ctx.getRegVal(DB_X86_R_R8)$
-        fmts = ctx.getCWStr(fmt)$
+        ctx.setRegVal(DB_X86_R_RIP, symaddr6)
+        buf = ctx.getRegVal(DB_X86_R_RCX)
+        fmt = ctx.getRegVal(DB_X86_R_R8)
+        fmts = ctx.getCWStr(fmt)
         # set hook for after return
-        sp = ctx.getRegVal(DB_X86_R_RSP)$
-        retaddr = ctx.getu64(sp)$
+        sp = ctx.getRegVal(DB_X86_R_RSP)
+        retaddr = ctx.getu64(sp)
         def finish_swprintf_s_hook(hook, ctx, addr, sz, op, provider):
             # remove self
             ctx.delHook(hook)
-            s = ctx.getCWStr(buf)$
+            s = ctx.getCWStr(buf)
             print(f"Finished swprintf_s: \"{s}\" from \"{fmts}\"")
             return HookRet.OP_CONT_INS
         ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish_swprintf_s_hook, label="")
@@ -506,17 +506,17 @@ def createThunkHooks(ctx):
     name = "vswprintf_s"
     symaddr7 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     def vswprintf_s_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr7)$
-        buf = ctx.getRegVal(DB_X86_R_RCX)$
-        fmt = ctx.getRegVal(DB_X86_R_R8)$
-        fmts = ctx.getCWStr(fmt)$
+        ctx.setRegVal(DB_X86_R_RIP, symaddr7)
+        buf = ctx.getRegVal(DB_X86_R_RCX)
+        fmt = ctx.getRegVal(DB_X86_R_R8)
+        fmts = ctx.getCWStr(fmt)
         # set hook for after return
-        sp = ctx.getRegVal(DB_X86_R_RSP)$
-        retaddr = ctx.getu64(sp)$
+        sp = ctx.getRegVal(DB_X86_R_RSP)
+        retaddr = ctx.getu64(sp)
         def finish_vswprintf_s_hook(hook, ctx, addr, sz, op, provider):
             # remove self
             ctx.delHook(hook)
-            s = ctx.getCWStr(buf)$
+            s = ctx.getCWStr(buf)
             print(f"Finished vswprintf_s: \"{s}\" from \"{fmts}\"")
             return HookRet.OP_CONT_INS
         ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish_vswprintf_s_hook, label="")
@@ -526,17 +526,17 @@ def createThunkHooks(ctx):
     name = "_vsnwprintf"
     symaddr8 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     def _vsnwprintf_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr8)$
-        buf = ctx.getRegVal(DB_X86_R_RCX)$
-        fmt = ctx.getRegVal(DB_X86_R_R8)$
-        fmts = ctx.getCWStr(fmt)$
+        ctx.setRegVal(DB_X86_R_RIP, symaddr8)
+        buf = ctx.getRegVal(DB_X86_R_RCX)
+        fmt = ctx.getRegVal(DB_X86_R_R8)
+        fmts = ctx.getCWStr(fmt)
         # set hook for after return
-        sp = ctx.getRegVal(DB_X86_R_RSP)$
-        retaddr = ctx.getu64(sp)$
+        sp = ctx.getRegVal(DB_X86_R_RSP)
+        retaddr = ctx.getu64(sp)
         def finish__vsnwprintf_s_hook(hook, ctx, addr, sz, op, provider):
             # remove self
             ctx.delHook(hook)
-            s = ctx.getCWStr(buf)$
+            s = ctx.getCWStr(buf)
             print(f"Finished _vsnwprintf_s: \"{s}\" from \"{fmts}\"")
             return HookRet.OP_CONT_INS
         ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish__vsnwprintf_s_hook, label="")
@@ -593,9 +593,9 @@ def initSys(ctx):
 
         # write the values back
         bts = struct.pack("<QI", tc, tc>>32)
-        ctx.setMemVal(shared_data_addr + 0x320, bts)$
+        ctx.setMemVal(shared_data_addr + 0x320, bts)
         bts = struct.pack("<QIQI", it, it>>32, st, st>>32)
-        ctx.setMemVal(shared_data_addr + 0x8, bts)$
+        ctx.setMemVal(shared_data_addr + 0x8, bts)
 
         if shared_data_addr + 0x8 <= addr < shared_data_addr + 0x14:
             print("Read from InterruptTime")

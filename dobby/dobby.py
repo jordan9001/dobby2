@@ -1,4 +1,7 @@
 from .dobby_const import *
+import lief
+import struct
+import string
 
 class Dobby:
     def __init__(self, apihookarea=0xffff414100000000):
@@ -24,7 +27,6 @@ class Dobby:
         # inshooks are handlers of the form func(ctx, addr, provider)
         self.inshooks = {
             "rdtsc" : self.rdtscHook,
-            "smsw": self.smswHook,
         }
 
         # setup annotation stuff
@@ -50,7 +52,7 @@ class Dobby:
         # for now just support x86
         self.spreg = DB_X86_R_RSP
         self.ipreg = DB_X86_R_RIP
-        self.pgshf = DB_X86_PGSHF
+        self.pgshft = DB_X86_PGSHFT
         self.pgsz = DB_X86_PGSZ
         self.name2reg = x86name2reg
         self.reg2name = x86reg2name
@@ -67,6 +69,8 @@ class Dobby:
             self.activateProvider(provider)
 
     def activateProvider(self, provider):
+        if self.active is not None:
+            self.deactivateProvider()
         self.active = provider
         self.isemu = provider.isEmuProvider
         self.issym = provider.isSymProvider
@@ -74,10 +78,10 @@ class Dobby:
         self.ismem = provider.isMemoryProvider
         self.issnp = provider.isSnapshotProvider
 
-        self.active.activate()
+        self.active.activated()
 
     def deactivateProvider(self):
-        self.active.deactivate()
+        self.active.deactivated()
 
         self.active = None
         self.isemu = False
@@ -274,6 +278,11 @@ class Dobby:
             raise RuntimeError("No memory providers are active")
         return self.active.disass(addr, count)
 
+    def getInsLen(self, addr=-1):
+        if not self.ismem:
+            raise RuntimeError("No memory providers are active")
+        return self.active.getInsLen(addr)
+
     def nameToReg(self, name):
         name = name.lower()
         if name not in self.name2reg:
@@ -305,7 +314,7 @@ class Dobby:
         if not self.ismem:
             raise RuntimeError("No memory providers are active")
 
-        if self.issym and not allowsymb and self.isSymbolizedMemory():
+        if self.issym and not allowsymb and self.isSymbolizedMemory(addr, amt):
             raise ValueError("Tried to get concrete value for a symbolic region of memory")
 
         self.active.getMemVal(addr, amt)
@@ -645,7 +654,7 @@ class Dobby:
         hk.handler = handler
 
     @staticmethod
-    def rdtscHook(ctx, addr, ins, provider):
+    def rdtscHook(ctx, addr, provider):
         cycles = ctx.getCycles()
         newrip = ctx.getRegVal(ctx.api.registers.rip) + 2
         ctx.setRegVal(ctx.ipreg, newrip)

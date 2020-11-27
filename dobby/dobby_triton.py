@@ -3,7 +3,7 @@ from triton import *
 from .interface import *
 from .dobby import *
 
-class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, DobbySnapshot):
+class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, DobbySnapshot):
     """
     Dobby provider using Triton DSE
     """
@@ -32,6 +32,7 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
         # register callbacks
         self.addrswritten = []
         self.addrread = []
+        self.callbackson = False
         self.api.addCallback(CALLBACK.GET_CONCRETE_MEMORY_VALUE, self.getMemCallback)
         self.api.addCallback(CALLBACK.SET_CONCRETE_MEMORY_VALUE, self.setMemCallback)
 
@@ -150,12 +151,18 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
         return inst
 
     def setMemCallback(self, trictx, mem, val):
+        if not self.callbackson:
+            return
+
         addr = mem.getAddress()
         size = mem.getSize()
 
         self.addrswritten.append((mem.getAddress(), mem.getSize()))
 
-    def getMemCallback(self, trictx, mem, val):
+    def getMemCallback(self, trictx, mem):
+        if not self.callbackson:
+            return
+
         addr = mem.getAddress()
         size = mem.getSize()
 
@@ -248,7 +255,7 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
         # check inshooks
         ins_name = ins.getDisassembly().split()[0]
         if ins_name in ctx.inshooks:
-            ihret = ctx.inshooks[ins_name](self, insaddr, ins, False)
+            ihret = ctx.inshooks[ins_name](self, insaddr, ctx.active)
 
             if ihret == HookRet.OP_CONT_INST:
                 if ctx.opstop:
@@ -274,11 +281,15 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
             else:
                 raise ValueError("Unknown return from instruction hook")
 
+        self.callbackson = True
+
         # actually do a step
         #TODO how do we detect exceptions like divide by zero?
         # triton just lets divide by zero through
         if not self.api.processing(ins):
             return StepRet.BAD_INS
+
+        self.callbackson = False
 
         if self.trace is not None and self.tracefull:
             self.trace[-1][2][0] += self.addrsread
@@ -582,15 +593,25 @@ class DobbyTriton(DobbypProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem,
     # MEM INTERFACE
 
     def disass(self, addr=-1, count=16):
+        if addr == -1:
+            addr = self.getConcreteRegisterValue(self.api.registers.rip)
         lines = []
         for i in range(count):
             insbytes = self.api.getConcreteMemoryAreaValue(addr, 15)
-            inst = Instruction(rip, insbytes)
+            inst = Instruction(addr, insbytes)
             self.api.disassembly(inst)
             lines.append((addr, inst.getDisassembly()))
             addr = inst.getNextAddress()
         
         return lines
+
+    def getInsLen(self, addr=-1):
+        if addr == -1:
+            addr = self.getConcreteRegisterValue(self.api.registers.rip)
+        insbytes = self.api.getConcreteMemoryAreaValue(addr, 15)
+        inst = Instruction(addr, insbytes)
+        self.api.disassembly(inst)
+        return inst.getNextAddress() - addr
 
     def getMemVal(self, addr, amt):
         return self.api.getConcreteMemoryAreaValue(addr, amt)

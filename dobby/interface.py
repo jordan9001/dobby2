@@ -160,6 +160,9 @@ class DobbyMem:
     def disass(self, addr=-1, count=16):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
+    def getInsLen(self, addr=-1):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
     def getMemVal(self, addr, amt):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
