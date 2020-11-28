@@ -7,8 +7,8 @@ class HookRet(Enum):
     DONE_INS = 1
     STOP_INS = 2
     FORCE_STOP_INS = 3 # unlike STOP_INS this one can not be ignored
-    OP_CONT_INST = 4 # This one can optionally be a stop or a continue, depending on ctx.opstop
-    OP_DONE_INST = 4 # This one can optionally be a stop or a done, depending on ctx.opstop
+    OP_CONT_INS = 4 # This one can optionally be a stop or a continue, depending on ctx.opstop
+    OP_DONE_INS = 5 # This one can optionally be a stop or a done, depending on ctx.opstop
 
 class StepRet(Enum):
     ERR_STACK_OOB = -3

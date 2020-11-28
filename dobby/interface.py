@@ -51,7 +51,7 @@ class DobbyEmu:
         """
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def insertedHook(self, hook):
+    def insertHook(self, hook):
         """
         Called when a hook is added
         Hooks are stored in ctx.hooks
@@ -60,7 +60,7 @@ class DobbyEmu:
         """ 
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def removedHook(self, hook):
+    def removeHook(self, hook):
         """
         Called when a hook is removed
         Hooks are stored in ctx.hooks and will be removed after this callback
@@ -150,6 +150,9 @@ class DobbyRegContext:
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
     def setRegVal(self, reg, val):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
+    def getAllRegisters(self):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
 class DobbyMem:

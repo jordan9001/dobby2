@@ -112,7 +112,7 @@ class Dobby:
     def printReg(self, reg):
         print(self.getRegName(reg), end=" = ")
 
-        if self.issym and self.isSymbolizedReg(reg):
+        if self.issym and self.isSymbolizedRegister(reg):
             ast = self.getRegisterAst(reg)
             self.printAst(ast)
         else:
@@ -136,7 +136,7 @@ class Dobby:
         if not self.inBounds(addr, amt, MEM_NONE):
             print("Warning, OOB memory")
         # read symbolic memory too
-        if self.issym and self.isSymbolizedMem(addr, amt):
+        if self.issym and self.isSymbolizedMemory(addr, amt):
             print("Warning, contains symbolized memory")
             self.printSymMem(addr, amt, 8, simp)
         else:
@@ -287,19 +287,21 @@ class Dobby:
         name = name.lower()
         if name not in self.name2reg:
             raise KeyError(f"{name} is not a valid register name")
-        return self.name2reg(name)
+        return self.name2reg[name]
 
     def getRegName(self, reg):
-        return self.reg2name(reg)
+        return self.reg2name[reg]
 
     def getAllReg(self):
-        return list(self.reg2name.keys())
+        if not self.isreg:
+            raise RuntimeError("No Register providers are active")
+        return self.active.getAllRegisters()
 
     def getRegVal(self, reg, *, allowsymb=False):
         if not self.isreg:
             raise RuntimeError("No register providers are active")
 
-        if self.issym and not allowsymb and self.isSymbolizedRegister():
+        if self.issym and not allowsymb and self.isSymbolizedRegister(reg):
             raise ValueError("Tried to get concrete value for a symbolic register")
 
         return self.active.getRegVal(reg)
@@ -317,7 +319,7 @@ class Dobby:
         if self.issym and not allowsymb and self.isSymbolizedMemory(addr, amt):
             raise ValueError("Tried to get concrete value for a symbolic region of memory")
 
-        self.active.getMemVal(addr, amt)
+        return self.active.getMemVal(addr, amt)
 
     def getRegMemVal(self, reg, amt):
         addr = self.getRegVal(reg)
@@ -341,7 +343,7 @@ class Dobby:
 
     def getCycles(self):
         # returns number of cycles like rdtsc would
-        return int(self.getIns() // self.IPC)
+        return int(self.getInsCount() // self.IPC)
 
     def getTicks(self):
         # turns cycles into 100ns ticks
@@ -368,7 +370,7 @@ class Dobby:
     def symbolizeMemory(self, addr, size, name):
         if not self.issym:
             raise RuntimeError("No symbolic providers are active")
-        self.active.symbolizeRegister(addr, size, name)
+        self.active.symbolizeMemory(addr, size, name)
 
     def isSymbolizedRegister(self, reg):
         if not self.issym:
@@ -567,27 +569,24 @@ class Dobby:
 
         return h
 
+    def bp(self, addr):
+        self.addHook(addr, addr+1, MEM_EXECUTE, None, "breakpoint")
+
     def delHook(self, hook, htype=MEM_ALL):
         if self.isemu:
-            self.active.removeHook(hook, htype)
+            self.active.removeHook(hook)
 
-        if (htype & MEM_EXECUTE) != 0:
-            if hook not in self.hooks[0]:
-                raise KeyError(f"Removing {hook} from execute hooks, when it is not in the execute hook list!")
+        if (htype & MEM_EXECUTE) != 0 and hook in self.hooks[0]:
             self.hooks[0].remove(hook)
-        if (htype & MEM_READ) != 0:
-            if hook not in self.hooks[1]:
-                raise KeyError(f"Removing {hook} from read hooks, when it is not in the read hook list!")
+        if (htype & MEM_READ) != 0 and hook in self.hooks[1]:
             self.hooks[1].remove(hook)
-        if (htype & MEM_WRITE) != 0:
-            if hook not in self.hooks[2]:
-                raise KeyError(f"Removing {hook} from write hooks, when it is not in the write hook list!")
+        if (htype & MEM_WRITE) != 0 and hook in self.hooks[2]:
             self.hooks[2].remove(hook)
 
     def doRet(self, retval=0):
         self.setRegVal(DB_X86_R_RAX, retval)
-        sp = self.getRegVal(self.SPREG)
-        retaddr = self.getu64(self.spreg)
+        sp = self.getRegVal(self.spreg)
+        retaddr = self.getu64(sp)
         self.setRegVal(self.ipreg, retaddr)
         self.setRegVal(self.spreg, sp+8)
 
@@ -640,7 +639,7 @@ class Dobby:
         if not self.isemu:
             raise RuntimeError("No emulation providers are active")
 
-        found = [x for x in self.hooks if x.isApiHook and x.label.endswith("::"+name) and 0 != (x.htype & MEM_EXECUTE)]
+        found = [x for x in self.hooks[0] if x.isApiHook and x.label.endswith("::"+name) and 0 != (x.htype & MEM_EXECUTE)]
 
         if len(found) != 1:
             raise KeyError(f"Found {len(found)} hooks that match that name, unable to set handler")
@@ -656,7 +655,7 @@ class Dobby:
     @staticmethod
     def rdtscHook(ctx, addr, provider):
         cycles = ctx.getCycles()
-        newrip = ctx.getRegVal(ctx.api.registers.rip) + 2
+        newrip = ctx.getRegVal(ctx.ipreg) + 2
         ctx.setRegVal(ctx.ipreg, newrip)
         aval = cycles & 0xffffffff
         dval = (cycles >> 32) & 0xffffffff
@@ -790,7 +789,7 @@ class Dobby:
                 sym = True
 
             self.setRegVal(r, 0)
-            if self.issym and sym and symbolizeControl:
+            if self.issym and sym:
                 self.symbolizeRegister(r, "Inital " + n)
 
         # setup rflags to be sane
@@ -908,7 +907,7 @@ class Dobby:
             raise TypeError(f"Unknown op to handler hook \"{op}\"")
 
         if handler is not None:
-            hret = handler(hk, self, addr, sz, op, provider)
+            hret = handler(hk, self, addr, sz, op, self.active)
             
             if hret == HookRet.FORCE_STOP_INS:
                 return (True, stopret)
@@ -950,25 +949,25 @@ class Dobby:
         if not self.isemu:
             raise RuntimeError("No emulation providers are active")
 
-        return self.active.step(ignorehook)
+        return self.active.step(ignorehook, self.printIns)
 
-    def cont(self, ignoreFirst=True, n=0):
+    def cont(self, ignorehook=True, n=0):
         if not self.isemu:
             raise RuntimeError("No emulation providers are active")
 
-        return self.active.cont(ignorehook)
+        return self.active.cont(ignorehook, self.printIns)
 
-    def until(self, addr, ignoreFirst=True):
+    def until(self, addr, ignorehook=True):
         if not self.isemu:
             raise RuntimeError("No emulation providers are active")
 
-        return self.active.until(addr, ignorehook)
+        return self.active.until(addr, ignorehook, self.printIns)
 
-    def next(self, ignoreFirst=True):
+    def next(self, ignorehook=True):
         if not self.isemu:
             raise RuntimeError("No emulation providers are active")
 
-        return self.active.next(ignorehook)
+        return self.active.next(ignorehook, self.printIns)
 
 class Hook:
     """

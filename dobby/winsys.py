@@ -125,7 +125,7 @@ def initUnicodeStr(ctx, addr, s):
 def readUnicodeStr(ctx, addr):
     l = ctx.getu16(addr)
     ptr = ctx.getu64(addr+0x8)
-    if ctx.issym and ctx.isMemorySymbolized(addr+8, 8):
+    if ctx.issym and ctx.isSymbolizedMemory(addr+8, 8):
         print("Tried to read from a symbolized buffer in a unicode string")
         return ""
     b = ctx.getMemVal(ptr, l)

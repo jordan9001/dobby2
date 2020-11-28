@@ -10,7 +10,8 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
 
     def __init__(self, ctx):
         super().__init__(ctx, "Triton")
-        ctx.triton = self
+        self.ctx = ctx
+        self.ctx.triton = self
         
         # setup Triton API
         self.api = TritonContext(ARCH.X86_64)
@@ -31,7 +32,7 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
 
         # register callbacks
         self.addrswritten = []
-        self.addrread = []
+        self.addrsread = []
         self.callbackson = False
         self.api.addCallback(CALLBACK.GET_CONCRETE_MEMORY_VALUE, self.getMemCallback)
         self.api.addCallback(CALLBACK.SET_CONCRETE_MEMORY_VALUE, self.setMemCallback)
@@ -49,6 +50,10 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         self.db2tri = {}
         self.tri2db = {}
 
+        self.triton_inshooks = {
+            "smsw": self.smswHook,
+        }
+
         for dbreg in x86allreg:
             regname = x86reg2name[dbreg]
             try:
@@ -63,10 +68,10 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
     def getInsCount(self):
         return self.inscount
 
-    def insertedHook(self, hook):
+    def insertHook(self, hook):
         pass
 
-    def removedHook(self, hook):
+    def removeHook(self, hook):
         pass
 
     def insertInstructionHook(self, insname, handler):
@@ -93,8 +98,11 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
     def step(self, ignorehook, printIns):
         ins = self.getNextIns()
         if printIns:
-            #TODO if in API hooks, print API hook instead
-            print(ins)
+            if (self.ctx.apihooks.start <= ins.getAddress() < self.ctx.apihooks.end):
+                #TODO print API hook label
+                print("API hook")
+            else:
+                print(ins)
         return self.stepi(ins, ignorehook)
 
     def cont(self, ignorehook, printInst):
@@ -131,9 +139,9 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         i = self.getNextIns()
         if i.getDisassembly().startswith("call"):
             na = i.getNextAddress()
-            return self.until(na, ignoreFirst)
+            return self.until(na, ignorehook)
 
-        return self.step(ignoreFirst)
+        return self.step(ignorehook)
 
     # EMU HELPERS
 
@@ -166,13 +174,13 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         addr = mem.getAddress()
         size = mem.getSize()
 
-        self.addrsread.append((mem.getAddress, mem.getSize()))
+        self.addrsread.append((mem.getAddress(), mem.getSize()))
 
     def stepi(self, ins, ignorehook=False):
         # do pre-step stuff
-        ctx.lasthook = None
+        self.ctx.lasthook = None
         self.addrswritten = []
-        self.addrread = []
+        self.addrsread = []
         self.lastins = ins
 
         # rip and rsp should always be a concrete value at the beginning of this function
@@ -184,15 +192,15 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         #TODO add exception raising after possible first_chance stop?
 
         # enforce page permissions
-        if not ctx.inBounds(rip, ins.getSize(), MEM_EXECUTE):
+        if not self.ctx.inBounds(rip, ins.getSize(), MEM_EXECUTE):
             return StepRet.ERR_IP_OOB
 
         # check if rip is at a hooked execution location
-        for eh in ctx.hooks[0]: #TODO be able to search quicker here
+        for eh in self.ctx.hooks[0]: #TODO be able to search quicker here
             if eh.start <= rip < eh.end:
                 # hooked
                 #TODO multiple hooks at the same location?
-                stop, sret = ctx.handle_hook(eh, rip, 1, MEM_EXECUTE, ignorehook, False)
+                stop, sret = self.ctx.handle_hook(eh, rip, 1, MEM_EXECUTE, ignorehook)
                 if not stop:
                     break
                 return sret
@@ -254,19 +262,23 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
 
         # check inshooks
         ins_name = ins.getDisassembly().split()[0]
-        if ins_name in ctx.inshooks:
-            ihret = ctx.inshooks[ins_name](self, insaddr, ctx.active)
+        ihret = None
+        if ins_name in self.triton_inshooks:
+            ihret = self.triton_inshooks[ins_name](self.ctx, insaddr, ins, self)
+        elif ins_name in self.ctx.inshooks:
+            ihret = self.ctx.inshooks[ins_name](self.ctx, insaddr, self)
 
-            if ihret == HookRet.OP_CONT_INST:
-                if ctx.opstop:
-                    ihret = HookRet.STOP_INST
+        if ihret is not None:
+            if ihret == HookRet.OP_CONT_INS:
+                if self.ctx.opstop:
+                    ihret = HookRet.STOP_INS
                 else:
-                    ihret = HookRet.CONT_INST
-            if ihret == HookRet.OP_DONE_INST:
-                if ctx.opstop:
-                    ihret = HookRet.STOP_INST
+                    ihret = HookRet.CONT_INS
+            if ihret == HookRet.OP_DONE_INS:
+                if self.ctx.opstop:
+                    ihret = HookRet.STOP_INS
                 else:
-                    ihret = HookRet.DONE_INST
+                    ihret = HookRet.DONE_INS
 
             if ihret == HookRet.ERR:
                 return StepRet.HOOK_ERR
@@ -301,32 +313,32 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         # Read and Write hooks
         for addr, size in self.addrsread:
             # check access is in bounds
-            if not ctx.inBounds(addr, size, MEM_READ):
+            if not self.ctx.inBounds(addr, size, MEM_READ):
                 print("DEBUG: oob read at", hex(addr))
                 return StepRet.DREF_OOB
 
             # check if access is hooked
-            for rh in trictx.ctx.hooks[1]:
+            for rh in self.ctx.hooks[1]:
                 if (rh.start - size) < addr < rh.end:
                     # hooked
                     #TODO multiple hooks at the same location?
-                    stop, sret = ctx.handle_hook(rh, addr, size, MEM_READ, ignorehook, False)
+                    stop, sret = self.ctx.handle_hook(rh, addr, size, MEM_READ, ignorehook)
                     if not stop:
                         break
                     return sret
 
         for addr, size in self.addrswritten:
             # check access is in bounds
-            if not ctx.inBounds(addr, size, MEM_READ):
+            if not self.ctx.inBounds(addr, size, MEM_READ):
                 print("DEBUG: oob write at", hex(addr))
                 return StepRet.DREF_OOB
 
             # check if access is hooked
-            for wh in trictx.ctx.hooks[2]:
+            for wh in self.ctx.hooks[2]:
                 if (wh.start - size) < addr < wh.end:
                     # hooked
                     #TODO multiple hooks at the same location?
-                    stop, sret = ctx.handle_hook(rh, addr, size, MEM_WRITE, ignorehook, False)
+                    stop, sret = self.ctx.handle_hook(rh, addr, size, MEM_WRITE, ignorehook)
                     if not stop:
                         break
                     return sret
@@ -343,6 +355,21 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
             return StepRet.STACK_FORKED
 
         return StepRet.OK
+
+    @staticmethod
+    def smswHook(ctx, addr, ins, trictx):
+        cr0val = ctx.getRegVal(DB_X86_R_CR0)
+
+        newrip = ctx.getRegVal(DB_X86_R_RIP) + ins.getSize()
+        ctx.setRegVal(DB_X86_R_RIP, newrip)
+
+        op = ins.getOperands()[0]
+        if isinstance(op, trictx.type_Register):
+            ctx.setRegVal(op, cr0val)
+        else:
+            raise NotImplementedError("TODO")
+
+        return HookRet.DONE_INS
 
     # SYMBOLIC INTERFACE
 
@@ -581,6 +608,9 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
     def setRegVal(self, reg, val):
         trireg = self.db2tri[reg]
         self.api.setConcreteRegisterValue(trireg, val)
+
+    def getAllRegisters(self):
+        return list(self.db2tri.keys())
 
     # REG HELPERS
 
