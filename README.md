@@ -5,4 +5,6 @@ This was originally created to reverse engineer a highly obfuscated AntiCheat ke
 
 This code is not yet intended to be a usable product for anyone but me. Feel free to reach out about it though.
 
-This project is similar to (Qiling Framework)[https://github.com/qilingframework/qiling] or (Fireeye's Speakeasy)[https://github.com/fireeye/speakeasy] with the added power of supporting a symbolic execution api.
+This project is similar to (Qiling Framework)[https://github.com/qilingframework/qiling] or (Fireeye's Speakeasy)[https://github.com/fireeye/speakeasy]
+
+A reason to use this and not one of those tools is the added power of a symbolic execution api, and because I wrote it and I like things I write.
