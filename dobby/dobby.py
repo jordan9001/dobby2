@@ -28,6 +28,8 @@ class Dobby:
         self.active = None
         self.providers = []
 
+        self.snapshots = {}
+
         # for now just support x86
         self.spreg = DB_X86_R_RSP
         self.ipreg = DB_X86_R_RIP
@@ -52,6 +54,8 @@ class Dobby:
             self.activateProvider(provider)
 
     def activateProvider(self, provider):
+        if self.active == provider:
+            return
         if self.active is not None:
             self.deactivateProvider()
         self.active = provider
@@ -73,6 +77,33 @@ class Dobby:
         self.isreg = False
         self.ismem = False
         self.issnp = False
+
+    def removeProvider(self, provider):
+        if self.active == provider:
+            deactivateProvider()
+
+        self.providers.remove(provider)
+
+        provider.removed()
+
+    def getProvider(self, nameprefix):
+        found = None
+        for p in self.providers:
+            if p.getName().lower().startswith(nameprefix.lower()):
+                if found is not None:
+                    raise KeyError(f"Multiple providers start with \"{nameprefix}\"")
+                found = p
+        if found is not None:
+            return found
+        raise KeyError(f"No active provider that starts with \"{nameprefix}\"")
+
+    def setProvider(self, nameprefix):
+        p = self.getProvider(nameprefix)
+        self.activateProvider(p)
+
+    def delProvider(self, nameprefix):
+        p = self.getProvider(nameprefix)
+        removeProvider(p)
 
     def perm2Str(self, p):
         s = ""
@@ -988,6 +1019,46 @@ class Dobby:
             raise RuntimeError("No emulation providers are active")
 
         return self.active.next(ignorehook, self.printIns)
+
+    def takeSnap(self, name, store=True):
+        if not self.issnp:
+            raise RuntimeError("No emulation providers are active")
+
+        if name in self.snapshots:
+            raise KeyError(f"Snapshot named {name} already exists")
+
+        snap = SavedState(name)
+        
+        return snap
+
+    def restoreSnap(self, name):
+        if not self.issnp:
+            raise RuntimeError("No emulation providers are active")
+
+        if name not in self.snapshots:
+            raise KeyError(f"No snapshot named {name}")
+
+        #TODO
+
+    def removeSnap(self, name):
+        if name not in self.snapshots:
+            raise KeyError(f"No snapshot named {name}")
+
+        del self.snapshots[name]
+
+    def saveSnapFile(self, name, filename):
+        #TODO
+        raise NotImplementedError("TODO")
+
+    def loadSnapFile(self, name, filename):
+        #TODO
+        raise NotImplementedError("TODO")
+
+    def takeSnapFile(self, filename):
+        snap = takeSnap("_tmpsnp1", False)
+        # don't save this in the list, just direct to disk
+        #TODO
+        raise NotImplementedError("TODO")
 
 def hexdmp(stuff, start=0):
     printable = string.digits + string.ascii_letters + string.punctuation + ' '

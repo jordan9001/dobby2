@@ -57,6 +57,9 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
             except AttributeError:
                 pass
 
+    def removed(self):
+        self.ctx.unicorn = None
+
     # EMU INTERFACE
 
     def getInsCount(self):
@@ -344,9 +347,17 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
             #TODO
             raise e
 
-    # MEM Helper
+    # MEM HELPER
 
     def printUcMap(self):
         reg_i = self.emu.mem_regions()
         for r_beg, r_end, _ in reg_i:
             print(hex(r_beg) +'-'+ hex(r_end))
+
+    # SNAPSHOT INTERFACE
+
+    def takeSnapshot(self, snapshot):
+        pass
+
+    def restoreSnapshot(self, snapshot):
+        pass

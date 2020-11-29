@@ -12,6 +12,9 @@ class DobbyProvider:
         self.ctx = ctx
         self.providerName = name
 
+        #TODO maybe some of these items should actually be created in the interface's inits?
+        # because some of them are specific to emulation, memory, etc
+
         self.priv = True
         self.modules = []
 
@@ -22,7 +25,7 @@ class DobbyProvider:
         self.opstop = False
 
         # hooks that are installed
-        self.hooks = [[], [], []] # Execute, readwrite, write
+        self.hooks = [[], [], []] # Execute, read, write
         self.lasthook = None
 
         # inshooks are handlers of the form func(ctx, addr, provider)
@@ -51,6 +54,9 @@ class DobbyProvider:
 
         ctx.registerProvider(self, name, True)
 
+    def getName(self):
+        return self.providerName
+
     def activated(self):
         """
         Called when provider is activated
@@ -60,6 +66,12 @@ class DobbyProvider:
     def deactivated(self):
         """
         Called when provider is activated
+        """
+        pass
+
+    def removed(self):
+        """
+        Called when provider is removed
         """
         pass
 
@@ -220,14 +232,16 @@ class DobbySnapshot:
     State saving and restoring for providers to fill out
     """
 
-    def saveSnapshot(self):
-        raise NotImplementedError(f"{str(type(self))} does not implement this function")
-        
-    def loadSnapshot(self):
-        raise NotImplementedError(f"{str(type(self))} does not implement this function")
-
-    def takeSnapshot(self):
+    def takeSnapshot(self, snapshot):
+        """
+        A chance to save off things that the normal snapshot state
+        does not know about for this provider
+        """
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
-    def restoreSnapshot(self):
+    def restoreSnapshot(self, snapshot):
+        """
+        A chance to restore things that the normal snapshot state
+        does not know about for this provider
+        """
         raise NotImplementedError(f"{str(type(self))} does not implement this function")

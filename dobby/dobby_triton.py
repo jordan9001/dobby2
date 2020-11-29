@@ -63,6 +63,9 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
             except AttributeError:
                 pass
 
+    def removed(self):
+        self.ctx.triton = None
+
     #EMU INTERFACE
 
     def getInsCount(self):
@@ -661,3 +664,11 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
 
     def updateBounds(self, start, end, permissions):
         pass # not needed in this provider
+
+    # SNAPSHOT INTERFACE
+
+    def takeSnapshot(self, snapshot):
+        pass
+
+    def restoreSnapshot(self, snapshot):
+        pass
