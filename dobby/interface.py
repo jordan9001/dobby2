@@ -79,6 +79,12 @@ class DobbyEmu:
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
     def getTrace(self):
+        """
+        Trace should be a list of entries
+        Each entry being (address, disassembly, [list of read addresses, list of written addresses])
+        the disassembly and read/written addresses are optional if startTrace was given with getdrefs
+        then the user wants the read and written addresses to be included, if possible
+        """
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
     def stopTrace(self):
@@ -87,15 +93,17 @@ class DobbyEmu:
     def step(self, ignoreCurrentHook=True, printIns=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def cont(self, ignoreCurrentHook=True, printInst=True):
+    def cont(self, ignoreCurrentHook=True, printIns=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def until(self, addr, ignoreCurrentHook=True, printInst=True):
+    def contn(self, ignorehook, printIns, n):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
-    def next(self, ignoreCurrentHook=True, printInst=True):
+    def until(self, addr, ignoreCurrentHook=True, printIns=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
-         
+
+    def next(self, ignoreCurrentHook=True, printIns=True):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
 class DobbySym:
     """

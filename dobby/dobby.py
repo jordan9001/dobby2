@@ -1,5 +1,6 @@
 from .dobby_const import *
 import lief
+import json
 import struct
 import string
 
@@ -446,15 +447,16 @@ class Dobby:
         rawhdr = b""
         with open(path, "rb") as fp:
             rawhdr = fp.read(pe.sizeof_headers)
-        self.setMemVal(base, rawhdr)
-        self.addAnn(base, base+len(rawhdr), "MAPPED_PE_HDR", pe.name)
         roundedlen = (len(rawhdr) + (self.pgsz-1)) & (~(self.pgsz-1))
+
         self.updateBounds(base, base+roundedlen, MEM_READ, False)
+        self.setMemVal(base, rawhdr)
+
+        self.addAnn(base, base+len(rawhdr), "MAPPED_PE_HDR", pe.name)
 
         for phdr in pe.sections:
             start = base + phdr.virtual_address
             end = start + len(phdr.content)
-            self.setMemVal(base + phdr.virtual_address, phdr.content)
 
             if (end - start) < phdr.virtual_size:
                 end = start + phdr.virtual_size
@@ -473,6 +475,7 @@ class Dobby:
                 perm |= MEM_WRITE
 
             self.updateBounds(start, end, perm, False)
+            self.setMemVal(start, phdr.content)
 
         # do reloactions
         for r in pe.relocations:
@@ -667,18 +670,25 @@ class Dobby:
         if end <= start:
             raise ValueError("Tried to UpdateBounds with end <= start")
 
-        start = start >> self.pgshft
-        end = (end + (self.pgsz-1)) >> self.pgshft
-        while start < end:
-            if start not in self.bounds:
-                self.bounds[start] = permissions
-            elif not overrule and permissions != self.bounds[start]:
-                raise MemoryError(f"Tried to update bounds with permissions {permissions} when they were already {self.bounds[start]}")
-            start += 1
+        startshft = start >> self.pgshft
+        startcountshft = startshft
+        endshft = (end + (self.pgsz-1)) >> self.pgshft
+        while startshft < endshft:
+            if startshft not in self.bounds:
+                self.bounds[startshft] = permissions
+            else:
+                existingperm = self.bounds[startshft]
+                if not overrule and permissions != existingperm:
+                    raise MemoryError(f"Tried to update bounds with permissions {permissions} when they were already {self.bounds[start]}")
+                elif permissions == existingperm and startcountshft == startshft:
+                    startcountshft += 1
+            startshft += 1
 
-        #TODO call the providers
-        if self.ismem:
-            self.active.updateBounds(start, end, permissions)
+        # call the providers
+        if self.ismem and startcountshft != endshft:
+            rndstart = startcountshft << self.pgshft
+            rndend = endshft << self.pgshft
+            self.active.updateBounds(rndstart, rndend, permissions)
 
     def inBounds(self, addr, sz, access):
         start = addr >> self.pgshft
@@ -814,10 +824,14 @@ class Dobby:
         cr0val |= 0 << 18 # Alignment Mask
         cr0val |= 0 << 29 # Not Write-through
         cr0val |= 0 << 30 # Cache Disable
-        cr0val |= 1 << 31 # Paging Enabled
+        if self.active.providerName == "Triton":
+            cr0val |= 1 << 31 # Paging Enabled
+        else:
+            # we can't get away with this without actually supporting this in things like unicorn
+            #TODO
+            cr0val |= 0 << 31 # Paging Enabled
 
         self.setRegVal(DB_X86_R_CR0, cr0val)
-
         #TODO set cr4 as well
 
         # create stack
@@ -874,6 +888,14 @@ class Dobby:
         
         return self.active.stopTrace()
 
+    def printTrace(self, prev=42):
+        t = self.getTrace()[-prev:]
+        for e in t:
+            out = hex(e[0])[2:]
+            if len(e) >= 2:
+                out += ", " + e[1]
+            print(out)
+
     def cmpTraceAddrs(self, t1, t2):
         # looks like trying to stop execution with ^C can make the trace skip?
         if len(t1) != len(t2):
@@ -891,6 +913,21 @@ class Dobby:
                 break
         if not differ:
             print("Traces match")
+
+    def saveTrace(self, trace, filepath):
+        with open(filepath, "w") as fp:
+            for te in trace:
+                fp.write(json.dumps(te) + '\n')
+
+    def loadTrace(self, filepath):
+        trace = []
+        with open(filepath, "r") as fp:
+            while True:
+                l = fp.readline()
+                if l == "":
+                    break
+                trace.append(json.loads(l))
+        return trace
     
     #TODO move to EMU interface?
     def handle_hook(self, hk, addr, sz, op, ignorehook):

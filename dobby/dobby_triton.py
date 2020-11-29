@@ -47,12 +47,12 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         self.defsyms = set()
         self.lastins = None
 
-        self.db2tri = {}
-        self.tri2db = {}
-
         self.triton_inshooks = {
             "smsw": self.smswHook,
         }
+
+        self.db2tri = {}
+        self.tri2db = {}
 
         for dbreg in x86allreg:
             regname = x86reg2name[dbreg]
@@ -84,8 +84,7 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         if self.trace is not None:
             raise ValueError("Tried to start trace when there is already a trace being collected")
         self.trace = []
-        if getdrefs:
-            self.tracefull = True
+        getdrefs = getdrefs
 
     def getTrace(self):
         return self.trace
@@ -114,6 +113,19 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
             ret = self.step(False, printInst)
             if ret != StepRet.OK:
                 return ret
+
+    def contn(self, ignorehook, printIns, n):
+        if ignorehook:
+            ret = self.step(True, printInst)
+            n -= 1
+            if ret != StepRet.OK:
+                return ret
+        while n > 0:
+            ret = self.step(False, printInst)
+            if ret != StepRet.OK:
+                return ret
+            n -= 1
+        return ret
 
     def until(self, addr, ignorehook, printInst):
         ret = StepRet.OK
@@ -632,7 +644,6 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
             self.api.disassembly(inst)
             lines.append((addr, inst.getDisassembly()))
             addr = inst.getNextAddress()
-        
         return lines
 
     def getInsLen(self, addr=-1):
