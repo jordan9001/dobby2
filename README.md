@@ -1,11 +1,8 @@
 # Dobby2
 
-
 An emulator for reverse engineering obfuscated code built on top of Triton and Unicorn.
-This was used to reverse engineer the workings of a AntiCheat kernel module.
+This was originally created to reverse engineer a highly obfuscated AntiCheat kernel module.
 
-This code is not intended to be a usable product for anyone but me. 
-It is a bunch of helper tools that should have been refactored a long time ago.
-Use at your own risk.
+This code is not yet intended to be a usable product for anyone but me. Feel free to reach out about it though.
 
-Similar projects are Qiling Framework or Fireeye's Speakeasy
+This project is similar to (Qiling Framework)[https://github.com/qilingframework/qiling] or (Fireeye's Speakeasy)[https://github.com/fireeye/speakeasy] with the added power of supporting a symbolic execution api.
