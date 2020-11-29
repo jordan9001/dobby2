@@ -46,12 +46,14 @@ class Snapshot:
         # interface independant stuff
 
         self.priv = ctx.active.priv
-        self.modules = copy.deepcopy(ctx.active.modules)
+        #TODO self.modules = copy.deepcopy(ctx.active.modules)
         self.nextalloc = ctx.active.nextalloc
         self.hooks = copy.deepcopy(ctx.active.hooks)
         self.inshooks = copy.deepcopy(ctx.active.inshooks)
         self.ann = copy.deepcopy(ctx.active.ann)
         self.bounds = copy.deepcopy(ctx.active.bounds)
+        self.apihooks = copy.deepcopy(ctx.active.apihooks)
+        self.stackann = copy.deepcopy(ctx.active.stackann)
 
         if ctx.isemu:
             self.hasemu = True
@@ -76,7 +78,7 @@ class Snapshot:
                 sz = end - start
                 val = ctx.getMemVal(start, sz, allowsymb=True)
                 cval = zlib.compress(val, 6)
-                self.mem.append((addr, sz, self.COMP_ZLIB, cval))
+                self.mem.append((start, sz, self.COMP_ZLIB, cval))
 
         self.setup = True
 
@@ -90,12 +92,14 @@ class Snapshot:
         # interface independant stuff
 
         ctx.active.priv = self.priv
-        ctx.active.modules = copy.deepcopy(self.modules)
+        #TODO ctx.active.modules = copy.deepcopy(self.modules)
         ctx.active.nextalloc = self.nextalloc
         ctx.active.hooks = copy.deepcopy(self.hooks)
         ctx.active.inshooks = copy.deepcopy(self.inshooks)
         ctx.active.ann = copy.deepcopy(self.ann)
         ctx.active.bounds = copy.deepcopy(self.bounds)
+        ctx.active.apihooks = copy.deepcopy(self.apihooks)
+        ctx.active.stackann = copy.deepcopy(self.stackann)
 
         if ctx.isemu:
             if not self.hasemu:
@@ -118,14 +122,23 @@ class Snapshot:
                 # restore register state
                 allreg = ctx.active.getAllRegisters()
                 for r,rv in self.rstate.items():
-                    if r not in allreg and rv != 0:
-                        print("Did not load unsupported register {ctx.getRegName(r)}!")
-                    ctx.active.setRegVal(r, rv)
+                    if r not in allreg:
+                        if rv != 0:
+                            print(f"Warning: Did not load unsupported register {ctx.getRegName(r)}!")
+                    else:
+                        ctx.active.setRegVal(r, rv)
 
         if ctx.ismem:
             if not self.hasmem:
                 print("Warning: loading state from a provider without Emulation")
             else:
+                #TODO Copy On Write memory mapped files?
+                # update bounds
+                #TODO do this in groups, not once per page
+                for start, end, perm in ctx.getBoundsRegions(True):
+                    ctx.active.updateBounds(start, end, perm)
+
+                # update memory contents
                 for m in self.mem:
                     addr, sz, comptype, cval = m
 
@@ -138,19 +151,6 @@ class Snapshot:
                         raise TypeError("Unknown compression type")
 
                     ctx.setMemVal(addr, val)
-
-    def tofile(fname):
-        if not self.setup:
-            raise ValueError("Tried to write a uninitialized state to file")
-        # use pickle to serialize this object to a file
-        #TODO
-        raise NotImplementedError("TODO")
-
-    def fromfile(fname):
-        raise NotImplementedError("TODO")
-        # use pickle to deserialize this object
-        #TODO
-        self.setup = True
 
     def __repr__(self):
         return f"SaveState({self.name})" 

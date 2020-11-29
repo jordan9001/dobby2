@@ -45,6 +45,8 @@ class DobbyProvider:
         self.apihooks = Annotation(apihookarea, apihookarea, "API_HOOKS", "API HOOKS")
         self.ann.append(self.apihooks)
 
+        self.stackann = None
+
         # Dobby provider id stuff
         self.isEmuProvider = issubclass(type(self), DobbyEmu)
         self.isSymProvider = issubclass(type(self), DobbySym)

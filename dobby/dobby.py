@@ -1,9 +1,11 @@
 from .dobby_const import *
 from .dobby_types import *
+import os
 import lief
 import json
 import struct
 import string
+import pickle
 
 class Dobby:
     """
@@ -49,7 +51,7 @@ class Dobby:
         
         if activate:
             if self.active is not None:
-                print("Waring, deactivating previous provider")
+                print("Warning, deactivating previous provider")
                 self.deactivateProvider()
             self.activateProvider(provider)
 
@@ -616,6 +618,27 @@ class Dobby:
         ctx.doRet(0)
         return HookRet.DONE_INS
 
+    @staticmethod
+    def stack_guard_hook(hk, ctx, addr, sz, op, provider):
+        if ctx.active.stackann is None:
+            raise RuntimeError("No stack was initalized")
+        # grow the stack, if we can
+        newstart = ctx.stackann.start - 0x1000
+        if ctx.inBounds(newstart, 0x1000, MEM_NONE):
+            # error, stack ran into something else
+            print(f"Stack overflow! Stack with top at {stackann.start} could not grow")
+            return True
+
+        # grow annotation
+        ctx.stackann.start = newstart
+        # grow bounds
+        ctx.updateBounds(newstart, ctx.stackann[1], MEM_READ | MEM_WRITE, provider)
+        # move the hook
+        hk.start = newstart - 0x1000
+        hk.end = newstart
+        return False
+
+
     def addVolatileSymHook(name, addr, sz, op, stops=False):
         if op != MEM_READ:
             raise TypeError("addVolatileSymHook only works with read hooks")
@@ -849,31 +872,11 @@ class Dobby:
         #TODO set cr4 as well
 
         # create stack
-        stackstart = stackbase - (0x1000 * 16)
-        stackann = self.addAnn(stackstart, stackbase, "STACK", "Inital Stack")
-        self.updateBounds(stackstart, stackbase, MEM_READ | MEM_WRITE, False)
-
-        # add guard hook
-        def stack_guard_hook(hk, ctx, addr, sz, op, provider):
-            # grow the stack, if we can
-            nonlocal stackann
-
-            newstart = stackann.start - 0x1000
-            if ctx.inBounds(newstart, 0x1000, MEM_NONE):
-                # error, stack ran into something else
-                print(f"Stack overflow! Stack with top at {stackann.start} could not grow")
-                return True
-
-            # grow annotation
-            stackann.start = newstart
-            # grow bounds
-            ctx.updateBounds(newstart, stackann[1], MEM_READ | MEM_WRITE, provider)
-            # move the hook
-            hk.start = newstart - 0x1000
-            hk.end = newstart
-            return False
-
-        self.addHook(stackstart - (0x1000), stackstart, MEM_WRITE, stack_guard_hook, "Stack Guard")
+        if self.active.stackann is None:
+            stackstart = stackbase - (0x1000 * 16)
+            self.active.stackann = self.addAnn(stackstart, stackbase, "STACK", "Inital Stack")
+            self.updateBounds(stackstart, stackbase, MEM_READ | MEM_WRITE, False)
+            self.addHook(stackstart - (0x1000), stackstart, MEM_WRITE, self.stack_guard_hook, "Stack Guard")
 
         # create end hook
         self.addHook(end, end+1, MEM_EXECUTE, None, "End Hit")
@@ -1020,16 +1023,20 @@ class Dobby:
 
         return self.active.next(ignorehook, self.printIns)
 
-    def takeSnap(self, name, store=True):
+    def takeSnap(self, name):
         if not self.issnp:
             raise RuntimeError("No emulation providers are active")
 
         if name in self.snapshots:
             raise KeyError(f"Snapshot named {name} already exists")
 
-        snap = SavedState(name)
-        
-        return snap
+        snap = Snapshot(name)
+
+        snap.take(self)
+
+        self.active.takeSnapshot(snap)
+
+        self.snapshots[name] = snap
 
     def restoreSnap(self, name):
         if not self.issnp:
@@ -1038,7 +1045,11 @@ class Dobby:
         if name not in self.snapshots:
             raise KeyError(f"No snapshot named {name}")
 
-        #TODO
+        snap = self.snapshots[name]
+
+        snap.restore(self)
+
+        self.active.restoreSnapshot(snap)
 
     def removeSnap(self, name):
         if name not in self.snapshots:
@@ -1046,19 +1057,44 @@ class Dobby:
 
         del self.snapshots[name]
 
-    def saveSnapFile(self, name, filename):
-        #TODO
-        raise NotImplementedError("TODO")
+    def saveSnapFile(self, name, filename=None):
 
-    def loadSnapFile(self, name, filename):
-        #TODO
-        raise NotImplementedError("TODO")
+        if name not in self.snapshots:
+            raise KeyError(f"No snapshot named {name}")
 
-    def takeSnapFile(self, filename):
-        snap = takeSnap("_tmpsnp1", False)
-        # don't save this in the list, just direct to disk
-        #TODO
-        raise NotImplementedError("TODO")
+        if filename is None:
+            filename = "./"+name+".snap"
+
+        snap = self.snapshots[name]
+        try:
+            with open(filename, "wb") as fp:
+                    pickle.dump(snap, fp)
+        except Exception as e:
+            os.unlink(filename)
+            raise e
+
+    def loadSnapFile(self, filename):
+        snap = None
+        with open(filename, "rb") as fp:
+            snap = pickle.load(fp)
+
+        name = snap.name
+
+        if name in self.snapshots:
+            print(f"Snapshot named {name} already exists, appending a number")
+            i = 0
+            while name+str(i) in self.snapshots:
+                i += 1
+            name = name+str(i)
+
+        self.snapshots[name] = snap
+
+        return name
+
+    def takeSnapToFile(self, name="_quicksave", filename=None):
+        takeSnap(name)
+        saveSnapFile(name, filename)
+        removeSnap(name)
 
 def hexdmp(stuff, start=0):
     printable = string.digits + string.ascii_letters + string.punctuation + ' '

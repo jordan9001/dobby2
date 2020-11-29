@@ -12,3 +12,4 @@ target*
 *.id2
 *.trace
 *.bndb*
+*.snap

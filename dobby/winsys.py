@@ -419,128 +419,157 @@ def ZwQuerySystemInformation_hook(hook, ctx, addr, sz, op, provider):
     else:
         raise NotImplementedError(f"Unimplemented infoclass in ZwQuerySystemInformation : {hex(infoclass)}")
 
+_thunk_symaddr0 = -1
+def ExSystemTimeToLocalTime_hook(hook, ctx, addr, sz, op, provider):
+    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr0)
+    print("ExSystemTimeToLocalTime")
+    return HookRet.DONE_INS
+
+_thunk_symaddr1 = -1
+def RtlTimeToTimeFields_hook(hook, ctx, addr, sz, op, provider):
+    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr1)
+    print("RtlTimeToTimeFields")
+    return HookRet.DONE_INS
+
+_thunk_symaddr2 = -1
+def _stricmp_hook(hook, ctx, addr, sz, op, provider):
+    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr2)
+    s1addr = ctx.getRegVal(DB_X86_R_RCX)
+    s2addr = ctx.getRegVal(DB_X86_R_RDX)
+    s1 = ctx.getCStr(s1addr)
+    s2 = ctx.getCStr(s2addr)
+    print(f"_stricmp \"{s1}\" vs \"{s2}\"")
+    return HookRet.OP_DONE_INS
+
+_thunk_symaddr3 = -1
+def wcscat_s_hook(hook, ctx, addr, sz, op, provider):
+    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr3)
+    s1addr = ctx.getRegVal(DB_X86_R_RCX)
+    s2addr = ctx.getRegVal(DB_X86_R_R8)
+    num = ctx.getRegVal(DB_X86_R_RDX)
+    s1 = ctx.getCWStr(s1addr)
+    s2 = ctx.getCWStr(s2addr)
+    print(f"wcscat_s ({num}) \"{s1}\" += \"{s2}\"")
+    return HookRet.OP_DONE_INS
+
+_thunk_symaddr4 = -1
+def wcscpy_s_hook(hook, ctx, addr, sz, op, provider):
+    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr4)
+    dst = ctx.getRegVal(DB_X86_R_RCX)
+    src = ctx.getRegVal(DB_X86_R_R8)
+    num = ctx.getRegVal(DB_X86_R_RDX)
+    s = ctx.getCWStr(src)
+    print(f"wcscpy_s {hex(dst)[2:]}({num}) <= \"{s}\"")
+    return HookRet.OP_DONE_INS
+
+_thunk_symaddr5 = -1
+def RtlInitUnicodeString_hook(hook, ctx, addr, sz, op, provider):
+    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr5)
+    src = ctx.getRegVal(DB_X86_R_RDX)
+    s = ctx.getCWStr(src)
+    print(f"RtlInitUnicodeString \"{s}\"")
+    return HookRet.OP_DONE_INS
+
+_thunk_symaddr6 = -1
+def swprintf_s_hook(hook, ctx, addr, sz, op, provider):
+    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr6)
+    buf = ctx.getRegVal(DB_X86_R_RCX)
+    fmt = ctx.getRegVal(DB_X86_R_R8)
+    fmts = ctx.getCWStr(fmt)
+    # set hook for after return
+    sp = ctx.getRegVal(DB_X86_R_RSP)
+    retaddr = ctx.getu64(sp)
+    def finish_swprintf_s_hook(hook, ctx, addr, sz, op, provider):
+        # remove self
+        ctx.delHook(hook)
+        s = ctx.getCWStr(buf)
+        print(f"Finished swprintf_s: \"{s}\" from \"{fmts}\"")
+        return HookRet.OP_CONT_INS
+    ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish_swprintf_s_hook, label="")
+    return HookRet.OP_DONE_INS
+
+_thunk_symaddr7 = -1
+def vswprintf_s_hook(hook, ctx, addr, sz, op, provider):
+    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr7)
+    buf = ctx.getRegVal(DB_X86_R_RCX)
+    fmt = ctx.getRegVal(DB_X86_R_R8)
+    fmts = ctx.getCWStr(fmt)
+    # set hook for after return
+    sp = ctx.getRegVal(DB_X86_R_RSP)
+    retaddr = ctx.getu64(sp)
+    def finish_vswprintf_s_hook(hook, ctx, addr, sz, op, provider):
+        # remove self
+        ctx.delHook(hook)
+        s = ctx.getCWStr(buf)
+        print(f"Finished vswprintf_s: \"{s}\" from \"{fmts}\"")
+        return HookRet.OP_CONT_INS
+    ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish_vswprintf_s_hook, label="")
+    return HookRet.OP_DONE_INS
+
+_thunk_symaddr8 = -1
+def _vsnwprintf_hook(hook, ctx, addr, sz, op, provider):
+    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr8)
+    buf = ctx.getRegVal(DB_X86_R_RCX)
+    fmt = ctx.getRegVal(DB_X86_R_R8)
+    fmts = ctx.getCWStr(fmt)
+    # set hook for after return
+    sp = ctx.getRegVal(DB_X86_R_RSP)
+    retaddr = ctx.getu64(sp)
+    def finish__vsnwprintf_s_hook(hook, ctx, addr, sz, op, provider):
+        # remove self
+        ctx.delHook(hook)
+        s = ctx.getCWStr(buf)
+        print(f"Finished _vsnwprintf_s: \"{s}\" from \"{fmts}\"")
+        return HookRet.OP_CONT_INS
+    ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish__vsnwprintf_s_hook, label="")
+    return HookRet.OP_DONE_INS
+
 def createThunkHooks(ctx):
+    # have to be in higher scope for pickling the hooks
+    global _thunk_symaddr0
+    global _thunk_symaddr1
+    global _thunk_symaddr2
+    global _thunk_symaddr3
+    global _thunk_symaddr4
+    global _thunk_symaddr5
+    global _thunk_symaddr6
+    global _thunk_symaddr7
+    global _thunk_symaddr8
+
     name = "ExSystemTimeToLocalTime"
-    symaddr0 = ctx.getImageSymbol(name, "ntoskrnl.exe")
-    def ExSystemTimeToLocalTime_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr0)
-        print("ExSystemTimeToLocalTime")
-        return HookRet.DONE_INS
+    _thunk_symaddr0 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, ExSystemTimeToLocalTime_hook, "ignore")
 
     name = "RtlTimeToTimeFields"
-    symaddr1 = ctx.getImageSymbol(name, "ntoskrnl.exe")
-    def RtlTimeToTimeFields_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr1)
-        print("RtlTimeToTimeFields")
-        return HookRet.DONE_INS
+    _thunk_symaddr1 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, RtlTimeToTimeFields_hook, "ignore")
 
     name = "_stricmp"
-    symaddr2 = ctx.getImageSymbol(name, "ntoskrnl.exe")
-    def _stricmp_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr2)
-        s1addr = ctx.getRegVal(DB_X86_R_RCX)
-        s2addr = ctx.getRegVal(DB_X86_R_RDX)
-        s1 = ctx.getCStr(s1addr)
-        s2 = ctx.getCStr(s2addr)
-        print(f"_stricmp \"{s1}\" vs \"{s2}\"")
-        return HookRet.OP_DONE_INS
+    _thunk_symaddr2 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, _stricmp_hook, "ignore")
 
     name = "wcscat_s"
-    symaddr3 = ctx.getImageSymbol(name, "ntoskrnl.exe")
-    def wcscat_s_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr3)
-        s1addr = ctx.getRegVal(DB_X86_R_RCX)
-        s2addr = ctx.getRegVal(DB_X86_R_R8)
-        num = ctx.getRegVal(DB_X86_R_RDX)
-        s1 = ctx.getCWStr(s1addr)
-        s2 = ctx.getCWStr(s2addr)
-        print(f"wcscat_s ({num}) \"{s1}\" += \"{s2}\"")
-        return HookRet.OP_DONE_INS
+    _thunk_symaddr3 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, wcscat_s_hook, "ignore")
 
     name = "wcscpy_s"
-    symaddr4 = ctx.getImageSymbol(name, "ntoskrnl.exe")
-    def wcscpy_s_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr4)
-        dst = ctx.getRegVal(DB_X86_R_RCX)
-        src = ctx.getRegVal(DB_X86_R_R8)
-        num = ctx.getRegVal(DB_X86_R_RDX)
-        s = ctx.getCWStr(src)
-        print(f"wcscpy_s {hex(dst)[2:]}({num}) <= \"{s}\"")
-        return HookRet.OP_DONE_INS
+    _thunk_symaddr4 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, wcscpy_s_hook, "ignore")
 
     name = "RtlInitUnicodeString"
-    symaddr5 = ctx.getImageSymbol(name, "ntoskrnl.exe")
-    def RtlInitUnicodeString_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr5)
-        src = ctx.getRegVal(DB_X86_R_RDX)
-        s = ctx.getCWStr(src)
-        print(f"RtlInitUnicodeString \"{s}\"")
-        return HookRet.OP_DONE_INS
+    _thunk_symaddr5 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, RtlInitUnicodeString_hook, "ignore")
 
     name = "swprintf_s"
-    symaddr6 = ctx.getImageSymbol(name, "ntoskrnl.exe")
-    def swprintf_s_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr6)
-        buf = ctx.getRegVal(DB_X86_R_RCX)
-        fmt = ctx.getRegVal(DB_X86_R_R8)
-        fmts = ctx.getCWStr(fmt)
-        # set hook for after return
-        sp = ctx.getRegVal(DB_X86_R_RSP)
-        retaddr = ctx.getu64(sp)
-        def finish_swprintf_s_hook(hook, ctx, addr, sz, op, provider):
-            # remove self
-            ctx.delHook(hook)
-            s = ctx.getCWStr(buf)
-            print(f"Finished swprintf_s: \"{s}\" from \"{fmts}\"")
-            return HookRet.OP_CONT_INS
-        ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish_swprintf_s_hook, label="")
-        return HookRet.OP_DONE_INS
+    _thunk_symaddr6 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, swprintf_s_hook, "ignore")
 
     name = "vswprintf_s"
-    symaddr7 = ctx.getImageSymbol(name, "ntoskrnl.exe")
-    def vswprintf_s_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr7)
-        buf = ctx.getRegVal(DB_X86_R_RCX)
-        fmt = ctx.getRegVal(DB_X86_R_R8)
-        fmts = ctx.getCWStr(fmt)
-        # set hook for after return
-        sp = ctx.getRegVal(DB_X86_R_RSP)
-        retaddr = ctx.getu64(sp)
-        def finish_vswprintf_s_hook(hook, ctx, addr, sz, op, provider):
-            # remove self
-            ctx.delHook(hook)
-            s = ctx.getCWStr(buf)
-            print(f"Finished vswprintf_s: \"{s}\" from \"{fmts}\"")
-            return HookRet.OP_CONT_INS
-        ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish_vswprintf_s_hook, label="")
-        return HookRet.OP_DONE_INS
+    _thunk_symaddr7 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, vswprintf_s_hook, "ignore")
 
     name = "_vsnwprintf"
-    symaddr8 = ctx.getImageSymbol(name, "ntoskrnl.exe")
-    def _vsnwprintf_hook(hook, ctx, addr, sz, op, provider):
-        ctx.setRegVal(DB_X86_R_RIP, symaddr8)
-        buf = ctx.getRegVal(DB_X86_R_RCX)
-        fmt = ctx.getRegVal(DB_X86_R_R8)
-        fmts = ctx.getCWStr(fmt)
-        # set hook for after return
-        sp = ctx.getRegVal(DB_X86_R_RSP)
-        retaddr = ctx.getu64(sp)
-        def finish__vsnwprintf_s_hook(hook, ctx, addr, sz, op, provider):
-            # remove self
-            ctx.delHook(hook)
-            s = ctx.getCWStr(buf)
-            print(f"Finished _vsnwprintf_s: \"{s}\" from \"{fmts}\"")
-            return HookRet.OP_CONT_INS
-        ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish__vsnwprintf_s_hook, label="")
-        return HookRet.OP_DONE_INS
+    _thunk_symaddr8 = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, _vsnwprintf_hook, "ignore")
 
 
@@ -567,6 +596,29 @@ def loadNtos(ctx, base=0xfffff8026be00000):
     ctx.loadPE("ntoskrnl.exe", base)
     print("Loaded!")
 
+def kuser_time_hook(hk, ctx, addr, sz, op, provider):
+    # InterruptTime is 100ns scale time since start
+    it = ctx.getTicks()
+    # SystemTime is 100ns scale, as timestamp
+    st = ctx.getTime()
+    # TickCount is 1ms scale, as ticks update as if interrupts have maximum period?
+    # TODO adjust this?
+    tc = int(it // 10000)
+
+    # write the values back
+    bts = struct.pack("<QI", tc, tc>>32)
+    ctx.setMemVal(shared_data_addr + 0x320, bts)
+    bts = struct.pack("<QIQI", it, it>>32, st, st>>32)
+    ctx.setMemVal(shared_data_addr + 0x8, bts)
+
+    if shared_data_addr + 0x8 <= addr < shared_data_addr + 0x14:
+        print("Read from InterruptTime")
+    if shared_data_addr + 0x14 <= addr < shared_data_addr + 0x20:
+        print("Read from SystemTime")
+    if shared_data_addr + 0x320 <= addr < shared_data_addr + 0x330:
+        print("Read from TickCount")
+    return HookRet.CONT_INS
+
 def initSys(ctx):
     loadNtos(ctx)
     registerWinHooks(ctx)
@@ -581,29 +633,6 @@ def initSys(ctx):
     # time is # of 100-nanosecond intervals
     # these numbers aren't actually any good because we hook out a looot of functionality?
     # but eh, if things don't work then use a volatile symbol hook here
-
-    def kuser_time_hook(hk, ctx, addr, sz, op, provider):
-        # InterruptTime is 100ns scale time since start
-        it = ctx.getTicks()
-        # SystemTime is 100ns scale, as timestamp
-        st = ctx.getTime()
-        # TickCount is 1ms scale, as ticks update as if interrupts have maximum period?
-        # TODO adjust this?
-        tc = int(it // 10000)
-
-        # write the values back
-        bts = struct.pack("<QI", tc, tc>>32)
-        ctx.setMemVal(shared_data_addr + 0x320, bts)
-        bts = struct.pack("<QIQI", it, it>>32, st, st>>32)
-        ctx.setMemVal(shared_data_addr + 0x8, bts)
-
-        if shared_data_addr + 0x8 <= addr < shared_data_addr + 0x14:
-            print("Read from InterruptTime")
-        if shared_data_addr + 0x14 <= addr < shared_data_addr + 0x20:
-            print("Read from SystemTime")
-        if shared_data_addr + 0x320 <= addr < shared_data_addr + 0x330:
-            print("Read from TickCount")
-        return HookRet.CONT_INS
 
     ctx.addHook(shared_data_addr + 0x8, shared_data_addr+0x20, MEM_READ, kuser_time_hook, "Interrupt and System Time hook")
     ctx.addHook(shared_data_addr + 0x320, shared_data_addr+0x32c, MEM_READ, kuser_time_hook, "Tick Time hook")
