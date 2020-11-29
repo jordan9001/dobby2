@@ -1,4 +1,5 @@
 from .dobby_const import *
+from .dobby_types import *
 
 """
 This is the class that all providers must inherit from
@@ -7,10 +8,41 @@ class DobbyProvider:
     """
     This should be the first class inherited from, with the interfaces following in order after
     """
-    def __init__(self, ctx, name):
+    def __init__(self, ctx, name, apihookarea=0xffff414100000000):
         self.ctx = ctx
         self.providerName = name
 
+        self.priv = True
+        self.modules = []
+
+        # heap stuff
+        self.nextalloc = 0
+
+        # Stop for OP_STOP_INS
+        self.opstop = False
+
+        # hooks that are installed
+        self.hooks = [[], [], []] # Execute, readwrite, write
+        self.lasthook = None
+
+        # inshooks are handlers of the form func(ctx, addr, provider)
+        self.inshooks = {
+            "rdtsc" : self.ctx.rdtscHook,
+        }
+
+        # setup annotation stuff
+        # annotations are for noting things in memory that we track
+        self.ann = []
+
+        # setup bounds
+        # bounds is for sandboxing areas we haven't setup yet and tracking permissions
+        self.bounds = {}
+
+        # add annotation for the API_FUNC area
+        self.apihooks = Annotation(apihookarea, apihookarea, "API_HOOKS", "API HOOKS")
+        self.ann.append(self.apihooks)
+
+        # Dobby provider id stuff
         self.isEmuProvider = issubclass(type(self), DobbyEmu)
         self.isSymProvider = issubclass(type(self), DobbySym)
         self.isRegContextProvider = issubclass(type(self), DobbyRegContext)
@@ -192,4 +224,10 @@ class DobbySnapshot:
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
         
     def loadSnapshot(self):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
+    def takeSnapshot(self):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
+    def restoreSnapshot(self):
         raise NotImplementedError(f"{str(type(self))} does not implement this function")

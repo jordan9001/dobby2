@@ -177,7 +177,7 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
         # it happens before we are stopped
         ignorehook = (addr == self.ignorehookaddr)
         try:
-            for eh in self.ctx.hooks[0]:
+            for eh in self.hooks[0]:
                 if eh.start <= addr < eh.end:
                     # hooked
                     stop, sret = self.ctx.handle_hook(eh, addr, 1, MEM_EXECUTE, ignorehook)
@@ -226,7 +226,7 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
         try:
             # handle read / write hooks
             if access == UC_MEM_WRITE:
-                for wh in self.ctx.hooks[2]:
+                for wh in self.hooks[2]:
                     if wh.start <= addr < wh.end:
                         # hooked
                         #TODO should ignorehook if on that address?
@@ -238,7 +238,7 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
                         self.trystop = True
                         return
             else:
-                for rh in self.ctx.hooks[1]:
+                for rh in self.hooks[1]:
                     if rh.start <= addr < rh.end:
                         # hooked
                         #TODO should ignorehook if on that address?
@@ -265,7 +265,7 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
         try:
             # handle read / write hooks
             if access == UC_MEM_WRITE:
-                for wh in self.ctx.hooks[2]:
+                for wh in self.hooks[2]:
                     if wh.start <= addr < wh.end:
                         # hooked
                         #TODO return True/False?
@@ -278,7 +278,7 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
                         self.trystop = True
                         return ret
             else:
-                for rh in self.ctx.hooks[1]:
+                for rh in self.hooks[1]:
                     if rh.start <= addr < rh.end:
                         # hooked
                         #TODO return True/False?

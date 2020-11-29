@@ -97,7 +97,7 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
     def step(self, ignorehook, printIns):
         ins = self.getNextIns()
         if printIns:
-            if (self.ctx.apihooks.start <= ins.getAddress() < self.ctx.apihooks.end):
+            if (self.apihooks.start <= ins.getAddress() < self.apihooks.end):
                 #TODO print API hook label
                 print("API hook")
             else:
@@ -190,7 +190,6 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
 
     def stepi(self, ins, ignorehook=False):
         # do pre-step stuff
-        self.ctx.lasthook = None
         self.addrswritten = []
         self.addrsread = []
         self.lastins = ins
@@ -208,7 +207,7 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
             return StepRet.ERR_IP_OOB
 
         # check if rip is at a hooked execution location
-        for eh in self.ctx.hooks[0]: #TODO be able to search quicker here
+        for eh in self.hooks[0]: #TODO be able to search quicker here
             if eh.start <= rip < eh.end:
                 # hooked
                 #TODO multiple hooks at the same location?
@@ -277,17 +276,17 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         ihret = None
         if ins_name in self.triton_inshooks:
             ihret = self.triton_inshooks[ins_name](self.ctx, insaddr, ins, self)
-        elif ins_name in self.ctx.inshooks:
-            ihret = self.ctx.inshooks[ins_name](self.ctx, insaddr, self)
+        elif ins_name in self.inshooks:
+            ihret = self.inshooks[ins_name](self.ctx, insaddr, self)
 
         if ihret is not None:
             if ihret == HookRet.OP_CONT_INS:
-                if self.ctx.opstop:
+                if self.opstop:
                     ihret = HookRet.STOP_INS
                 else:
                     ihret = HookRet.CONT_INS
             if ihret == HookRet.OP_DONE_INS:
-                if self.ctx.opstop:
+                if self.opstop:
                     ihret = HookRet.STOP_INS
                 else:
                     ihret = HookRet.DONE_INS
@@ -330,7 +329,7 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
                 return StepRet.DREF_OOB
 
             # check if access is hooked
-            for rh in self.ctx.hooks[1]:
+            for rh in self.hooks[1]:
                 if (rh.start - size) < addr < rh.end:
                     # hooked
                     #TODO multiple hooks at the same location?
@@ -346,7 +345,7 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
                 return StepRet.DREF_OOB
 
             # check if access is hooked
-            for wh in self.ctx.hooks[2]:
+            for wh in self.hooks[2]:
                 if (wh.start - size) < addr < wh.end:
                     # hooked
                     #TODO multiple hooks at the same location?

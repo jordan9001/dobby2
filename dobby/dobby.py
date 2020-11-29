@@ -1,45 +1,23 @@
 from .dobby_const import *
+from .dobby_types import *
 import lief
 import json
 import struct
 import string
 
 class Dobby:
-    def __init__(self, apihookarea=0xffff414100000000):
+    """
+    This Dobby class holds only global state
+    All real state is held by the providers themselves
+    And transfered in snapshots
+    """
+    def __init__(self):
         print("🤘 Starting Dobby 🤘")
         self.systemtimestart = 0x1d68ce74d7e4519
         self.IPC = 16 # instructions / Cycle
         self.CPN = 3.2  # GigaCycles / Second == Cycles / Nanosecond
         self.IPN = self.IPC * self.CPN * 100 # instructions per 100nanosecond
         self.printIns = True
-        self.priv = True
-        self.modules = []
-
-        # heap stuff
-        self.nextalloc = 0
-
-        # Stop for OP_STOP_INS
-        self.opstop = False
-
-        # hooks that are installed
-        self.hooks = [[], [], []] # Execute, readwrite, write
-        self.lasthook = None
-
-        # inshooks are handlers of the form func(ctx, addr, provider)
-        self.inshooks = {
-            "rdtsc" : self.rdtscHook,
-        }
-
-        # setup annotation stuff
-        # annotations are for noting things in memory that we track
-        self.ann = []
-
-        # setup bounds
-        # bounds is for sandboxing areas we haven't setup yet and tracking permissions
-        self.bounds = {}
-
-        # add annotation for the API_FUNC area
-        self.apihooks = self.addAnn(apihookarea, apihookarea, "API_HOOKS", "API HOOKS")
 
         # setup values for active providers
         self.isemu = False
@@ -61,12 +39,16 @@ class Dobby:
         #TODO automatically register providers here?
 
     def registerProvider(self, provider, name, activate):
+        if provider in self.providers:
+            print(f"Provider {name} is already registered")
+            return
         print(f"Registering provider {name}")
         self.providers.append(provider)
         
         if activate:
             if self.active is not None:
                 print("Waring, deactivating previous provider")
+                self.deactivateProvider()
             self.activateProvider(provider)
 
     def activateProvider(self, provider):
@@ -82,7 +64,8 @@ class Dobby:
         self.active.activated()
 
     def deactivateProvider(self):
-        self.active.deactivated()
+        if self.active is not None:
+            self.active.deactivated()
 
         self.active = None
         self.isemu = False
@@ -165,11 +148,11 @@ class Dobby:
             print(hex(a)[2:]+':', hex(v)[2:])
 
     def printMap(self):
-        mp = [ x for x in self.ann if (x.end - x.start) != 0 ]
+        mp = [ x for x in self.active.ann if (x.end - x.start) != 0 ]
         mp.sort(key = lambda x: x.start)
 
         # add bounds areas not covered by ann
-        for p in self.bounds:
+        for p in self.active.bounds:
             covered = False
             # if b is not contained by any annotation save it
             s = p << self.pgshft
@@ -425,7 +408,7 @@ class Dobby:
         if pe is None:
             raise FileNotFoundError(f"Unable to parse file {path}")
 
-        if not again and pe.name in [ x.name for x in self.modules ]:
+        if not again and pe.name in [ x.name for x in self.active.modules ]:
             raise KeyError(f"PE with name {pe.name} already loaded")
 
         # get size, check base doesn't crush existing area
@@ -438,7 +421,7 @@ class Dobby:
         if self.inBounds(base, end - base, MEM_NONE):
             raise MemoryError(f"Could not load pe {pe.name} at {hex(base)}, because it would clobber existing memory")
 
-        self.modules.append(pe)
+        self.active.modules.append(pe)
 
         dif = base - pe.optional_header.imagebase
 
@@ -508,8 +491,8 @@ class Dobby:
         for i in pe.imports:
             for ie in i.entries:
                 # extend the API HOOKS execution hook 
-                hookaddr = self.apihooks.end
-                self.apihooks.end += 8
+                hookaddr = self.active.apihooks.end
+                self.active.apihooks.end += 8
                 self.setu64(base + ie.iat_address, hookaddr)
 
                 name = i.name + "::" + ie.name
@@ -524,7 +507,7 @@ class Dobby:
                 h = self.addHook(hookaddr, hookaddr+8, MEM_EXECUTE, None, "IAT entry from " + pe.name + " for " + name)
                 h.isApiHook = True
 
-        self.updateBounds(self.apihooks.start, self.apihooks.end, MEM_ALL, False)
+        self.updateBounds(self.active.apihooks.start, self.active.apihooks.end, MEM_ALL, False)
 
         # annotate symbols from image
         for sym in pe.exported_functions:
@@ -557,13 +540,13 @@ class Dobby:
 
         if (htype & MEM_EXECUTE) != 0:
             added = True
-            self.hooks[0].append(h)
+            self.active.hooks[0].append(h)
         if (htype & MEM_READ) != 0:
             added = True
-            self.hooks[1].append(h)
+            self.active.hooks[1].append(h)
         if (htype & MEM_WRITE) != 0:
             added = True
-            self.hooks[2].append(h)
+            self.active.hooks[2].append(h)
 
         if self.isemu:
             self.active.insertHook(h)
@@ -579,12 +562,12 @@ class Dobby:
         if self.isemu:
             self.active.removeHook(hook)
 
-        if (htype & MEM_EXECUTE) != 0 and hook in self.hooks[0]:
-            self.hooks[0].remove(hook)
-        if (htype & MEM_READ) != 0 and hook in self.hooks[1]:
-            self.hooks[1].remove(hook)
-        if (htype & MEM_WRITE) != 0 and hook in self.hooks[2]:
-            self.hooks[2].remove(hook)
+        if (htype & MEM_EXECUTE) != 0 and hook in self.active.hooks[0]:
+            self.active.hooks[0].remove(hook)
+        if (htype & MEM_READ) != 0 and hook in self.active.hooks[1]:
+            self.active.hooks[1].remove(hook)
+        if (htype & MEM_WRITE) != 0 and hook in self.active.hooks[2]:
+            self.active.hooks[2].remove(hook)
 
     def doRet(self, retval=0):
         self.setRegVal(DB_X86_R_RAX, retval)
@@ -642,7 +625,7 @@ class Dobby:
         if not self.isemu:
             raise RuntimeError("No emulation providers are active")
 
-        found = [x for x in self.hooks[0] if x.isApiHook and x.label.endswith("::"+name) and 0 != (x.htype & MEM_EXECUTE)]
+        found = [x for x in self.active.hooks[0] if x.isApiHook and x.label.endswith("::"+name) and 0 != (x.htype & MEM_EXECUTE)]
 
         if len(found) != 1:
             raise KeyError(f"Found {len(found)} hooks that match that name, unable to set handler")
@@ -674,12 +657,12 @@ class Dobby:
         startcountshft = startshft
         endshft = (end + (self.pgsz-1)) >> self.pgshft
         while startshft < endshft:
-            if startshft not in self.bounds:
-                self.bounds[startshft] = permissions
+            if startshft not in self.active.bounds:
+                self.active.bounds[startshft] = permissions
             else:
-                existingperm = self.bounds[startshft]
+                existingperm = self.active.bounds[startshft]
                 if not overrule and permissions != existingperm:
-                    raise MemoryError(f"Tried to update bounds with permissions {permissions} when they were already {self.bounds[start]}")
+                    raise MemoryError(f"Tried to update bounds with permissions {permissions} when they were already {self.active.bounds[start]}")
                 elif permissions == existingperm and startcountshft == startshft:
                     startcountshft += 1
             startshft += 1
@@ -696,9 +679,9 @@ class Dobby:
         end = (start + sz)
 
         while start < end:
-            if start not in self.bounds:
+            if start not in self.active.bounds:
                 return False
-            if access != (access & self.bounds[start]):
+            if access != (access & self.active.bounds[start]):
                 print("DEBUG Violated Memory Permissions?")
                 return False
             start += 1
@@ -709,17 +692,17 @@ class Dobby:
         curp = MEM_NONE
         start = 0
         last = -1
-        for p in sorted(self.bounds):
+        for p in sorted(self.active.bounds):
             if last == -1:
                 start = p
-                curp = self.bounds[p]
-            elif p > (last+1) or (withPerm and curp != self.bounds[p]):
+                curp = self.active.bounds[p]
+            elif p > (last+1) or (withPerm and curp != self.active.bounds[p]):
                 if withPerm:
                     out.append((start << self.pgshft, (last+1) << self.pgshft, curp))
                 else:
                     out.append((start << self.pgshft, (last+1) << self.pgshft))
                 start = p
-                curp = self.bounds[p]
+                curp = self.active.bounds[p]
             last = p
 
         if start <= last:
@@ -732,21 +715,21 @@ class Dobby:
 
     def getNextFreePage(self, addr):
         start = addr >> self.pgshft
-        while start in self.bounds:
+        while start in self.active.bounds:
             start += 1
 
         return start << self.pgshft
 
     def addAnn(self, start, end, mtype, label=""):
         ann = Annotation(start, end, mtype, label)
-        self.ann.append(ann)
+        self.active.ann.append(ann)
         return ann
 
     def getImageSymbol(self, symname, pename=""):
         # not to be confused with getSymbol, which works on symbolic symbols
         # this works on annotations of type SYMBOL
         symname = pename + "::" + symname
-        match = [ x for x in self.ann if x.mtype == "SYMBOL" and x.label.endswith(symname) ]
+        match = [ x for x in self.active.ann if x.mtype == "SYMBOL" and x.label.endswith(symname) ]
 
         if len(match) == 0:
             raise KeyError(f"Unable to find Symbol {symname}")
@@ -756,27 +739,27 @@ class Dobby:
         return match[0].start
 
     def alloc(self, amt):
-        if self.nextalloc == 0:
-            self.nextalloc = 0xffff765400000000 if self.priv else 0x660000
+        if self.active.nextalloc == 0:
+            self.active.nextalloc = 0xffff765400000000 if self.active.priv else 0x660000
 
-        start = self.nextalloc
+        start = self.active.nextalloc
 
         # round amt up to 0x10 boundry
         amt = (amt+0xf) & (~0xf)
 
         end = start + amt
-        self.nextalloc = end
+        self.active.nextalloc = end
 
         # if there is already an "ALLOC" annotation, extend it
         allocann = None
-        for a in self.ann:
+        for a in self.active.ann:
             if a.end == start and a.mtype == "ALLOC":
                 allocann = a
                 allocann.end = end
                 break;
         if allocann is None:
             allocann = Annotation(start, end, "ALLOC", "allocations")
-            self.ann.append(allocann)
+            self.active.ann.append(allocann)
 
         self.updateBounds(start, end, MEM_READ | MEM_WRITE)
 
@@ -785,9 +768,9 @@ class Dobby:
     def initState(self, start, end, stackbase=0, priv=0):
         #TODO be able to initalize/track multiple contexts
         #TODO work in emu mode
-        self.priv = (priv == 0)
+        self.active.priv = (priv == 0)
         if stackbase == 0:
-            stackbase = 0xffffb98760000000 if self.priv else 0x64f000
+            stackbase = 0xffffb98760000000 if self.active.priv else 0x64f000
 
         # zero or symbolize all registers
         for r in self.getAllReg():
@@ -931,7 +914,7 @@ class Dobby:
     
     #TODO move to EMU interface?
     def handle_hook(self, hk, addr, sz, op, ignorehook):
-        self.lasthook = hk
+        self.active.lasthook = hk
 
         handler = hk.handler
 
@@ -949,12 +932,12 @@ class Dobby:
             if hret == HookRet.FORCE_STOP_INS:
                 return (True, stopret)
             elif hret == HookRet.OP_CONT_INS:
-                if self.opstop:
+                if self.active.opstop:
                     hret = HookRet.STOP_INS
                 else:
                     hret = HookRet.CONT_INS
             elif hret == HookRet.OP_DONE_INS:
-                if self.opstop:
+                if self.active.opstop:
                     hret = HookRet.STOP_INS
                 else:
                     hret = HookRet.DONE_INS
@@ -977,7 +960,7 @@ class Dobby:
                 raise TypeError(f"Unknown return from hook handler for hook {eh}")
         else:
             # no ignoring API hooks with no handler
-            if (self.apihooks.start <= addr < self.apihooks.end) or (not ignorehook):
+            if (self.active.apihooks.start <= addr < self.active.apihooks.end) or (not ignorehook):
                 return (True, stopret)
             else:
                 return (False, StepRet.OK)
@@ -1005,31 +988,6 @@ class Dobby:
             raise RuntimeError("No emulation providers are active")
 
         return self.active.next(ignorehook, self.printIns)
-
-class Hook:
-    """
-    Hook handlers should have the signature (hook, addr, sz, op, provider)
-    """
-    def __init__(self, start, end, htype, label="", handler=None):
-        self.start = start
-        self.end = end
-        self.label = label
-        self.handler = handler
-        self.htype = htype
-        self.isApiHook=False
-
-    def __repr__(self):
-        return f"Hook @ {hex(self.start)}:\"{self.label}\"{' (no handler)' if self.handler is None else ''}"
-
-class Annotation:
-    def __init__(self, start, end, mtype="UNK", label=""):
-        self.start = start
-        self.end = end
-        self.mtype = mtype
-        self.label = label
-
-    def __repr__(self):
-        return f"{hex(self.start)}-{hex(self.end)}=>\"{self.mtype}:{self.label}\""
 
 def hexdmp(stuff, start=0):
     printable = string.digits + string.ascii_letters + string.punctuation + ' '
