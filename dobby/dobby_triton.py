@@ -379,7 +379,7 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
 
         op = ins.getOperands()[0]
         if isinstance(op, trictx.type_Register):
-            ctx.setRegVal(op, cr0val)
+            trictx.api.setConcreteRegisterValue(op, cr0val)
         else:
             raise NotImplementedError("TODO")
 

@@ -154,10 +154,6 @@ KeInsertQueueApc
 KeBugCheckEx
 """
 
-poolAllocations = [] # see ExAllocatePoolWithTag
-handles = {} # number : (object,)
-nexthandle = 1
-
 def ExAllocatePoolWithTag_hook(hook, ctx, addr, sz, op, provider):
     #TODO actually have an allocator? Hope they don't do this a lot
     #TODO memory permissions based on pool
@@ -167,7 +163,7 @@ def ExAllocatePoolWithTag_hook(hook, ctx, addr, sz, op, provider):
 
     area = ctx.alloc(amt)
 
-    poolAllocations.append((pool, amt, tag, area))
+    ctx.active.globstate["poolAllocations"].append((pool, amt, tag, area))
 
     print("ExAllocatePoolWithTag", hex(amt), tag, '=', hex(area))
 
@@ -238,9 +234,8 @@ def RtlDuplicateUnicodeString_hook(hook, ctx, addr, sz, op, provider):
     return HookRet.OP_DONE_INS
 
 def IoCreateFileEx_hook(hook, ctx, addr, sz, op, provider):
-    global nexthandle
-    h = nexthandle
-    nexthandle += 1
+    h = ctx.active.globstate["nexthandle"]
+    ctx.active.globstate["nexthandle"] += 1
 
     phandle = ctx.getRegVal(DB_X86_R_RCX)
     oa = ctx.getRegVal(DB_X86_R_R8)
@@ -282,7 +277,7 @@ def IoCreateFileEx_hook(hook, ctx, addr, sz, op, provider):
     ctx.setu64(iosb+8, info)
 
     objinfo = (h, name, disp, driverctx, provider)
-    handles[h] = objinfo
+    ctx.active.globstate["handles"][h] = objinfo
 
     ctx.doRet(0)
 
@@ -292,8 +287,8 @@ def IoCreateFileEx_hook(hook, ctx, addr, sz, op, provider):
 
 def ZwClose_hook(hook, ctx, addr, sz, op, provider):
     h = ctx.getRegVal(DB_X86_R_RCX)
-    name = handles[h][1]
-    del handles[h]
+    name = ctx.active.globstate["handles"][h][1]
+    del ctx.active.globstate["handles"][h]
     print(f"Closed File {h} ({name})")
     ctx.doRet(0)
     return HookRet.OP_DONE_INS
@@ -313,7 +308,7 @@ def ZwWriteFile_hook(hook, ctx, addr, sz, op, provider):
         print("ZwWriteFile with apcroutine!")
         return HookRet.FORCE_STOP_INS
 
-    name = handles[h][1]
+    name = ctx.active.globstate["handles"][h][1]
 
     off = 0
     if poff != 0:
@@ -419,21 +414,18 @@ def ZwQuerySystemInformation_hook(hook, ctx, addr, sz, op, provider):
     else:
         raise NotImplementedError(f"Unimplemented infoclass in ZwQuerySystemInformation : {hex(infoclass)}")
 
-_thunk_symaddr0 = -1
 def ExSystemTimeToLocalTime_hook(hook, ctx, addr, sz, op, provider):
-    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr0)
+    ctx.setRegVal(DB_X86_R_RIP, ctx.active.globstate["_thunk_symaddr0"])
     print("ExSystemTimeToLocalTime")
     return HookRet.DONE_INS
 
-_thunk_symaddr1 = -1
 def RtlTimeToTimeFields_hook(hook, ctx, addr, sz, op, provider):
-    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr1)
+    ctx.setRegVal(DB_X86_R_RIP, ctx.active.globstate["_thunk_symaddr1"])
     print("RtlTimeToTimeFields")
     return HookRet.DONE_INS
 
-_thunk_symaddr2 = -1
 def _stricmp_hook(hook, ctx, addr, sz, op, provider):
-    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr2)
+    ctx.setRegVal(DB_X86_R_RIP, ctx.active.globstate["_thunk_symaddr2"])
     s1addr = ctx.getRegVal(DB_X86_R_RCX)
     s2addr = ctx.getRegVal(DB_X86_R_RDX)
     s1 = ctx.getCStr(s1addr)
@@ -441,9 +433,8 @@ def _stricmp_hook(hook, ctx, addr, sz, op, provider):
     print(f"_stricmp \"{s1}\" vs \"{s2}\"")
     return HookRet.OP_DONE_INS
 
-_thunk_symaddr3 = -1
 def wcscat_s_hook(hook, ctx, addr, sz, op, provider):
-    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr3)
+    ctx.setRegVal(DB_X86_R_RIP, ctx.active.globstate["_thunk_symaddr3"])
     s1addr = ctx.getRegVal(DB_X86_R_RCX)
     s2addr = ctx.getRegVal(DB_X86_R_R8)
     num = ctx.getRegVal(DB_X86_R_RDX)
@@ -452,9 +443,8 @@ def wcscat_s_hook(hook, ctx, addr, sz, op, provider):
     print(f"wcscat_s ({num}) \"{s1}\" += \"{s2}\"")
     return HookRet.OP_DONE_INS
 
-_thunk_symaddr4 = -1
 def wcscpy_s_hook(hook, ctx, addr, sz, op, provider):
-    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr4)
+    ctx.setRegVal(DB_X86_R_RIP, ctx.active.globstate["_thunk_symaddr4"])
     dst = ctx.getRegVal(DB_X86_R_RCX)
     src = ctx.getRegVal(DB_X86_R_R8)
     num = ctx.getRegVal(DB_X86_R_RDX)
@@ -462,17 +452,15 @@ def wcscpy_s_hook(hook, ctx, addr, sz, op, provider):
     print(f"wcscpy_s {hex(dst)[2:]}({num}) <= \"{s}\"")
     return HookRet.OP_DONE_INS
 
-_thunk_symaddr5 = -1
 def RtlInitUnicodeString_hook(hook, ctx, addr, sz, op, provider):
-    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr5)
+    ctx.setRegVal(DB_X86_R_RIP, ctx.active.globstate["_thunk_symaddr5"])
     src = ctx.getRegVal(DB_X86_R_RDX)
     s = ctx.getCWStr(src)
     print(f"RtlInitUnicodeString \"{s}\"")
     return HookRet.OP_DONE_INS
 
-_thunk_symaddr6 = -1
 def swprintf_s_hook(hook, ctx, addr, sz, op, provider):
-    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr6)
+    ctx.setRegVal(DB_X86_R_RIP, ctx.active.globstate["_thunk_symaddr6"])
     buf = ctx.getRegVal(DB_X86_R_RCX)
     fmt = ctx.getRegVal(DB_X86_R_R8)
     fmts = ctx.getCWStr(fmt)
@@ -488,9 +476,8 @@ def swprintf_s_hook(hook, ctx, addr, sz, op, provider):
     ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish_swprintf_s_hook, label="")
     return HookRet.OP_DONE_INS
 
-_thunk_symaddr7 = -1
 def vswprintf_s_hook(hook, ctx, addr, sz, op, provider):
-    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr7)
+    ctx.setRegVal(DB_X86_R_RIP, ctx.active.globstate["_thunk_symaddr7"])
     buf = ctx.getRegVal(DB_X86_R_RCX)
     fmt = ctx.getRegVal(DB_X86_R_R8)
     fmts = ctx.getCWStr(fmt)
@@ -506,9 +493,8 @@ def vswprintf_s_hook(hook, ctx, addr, sz, op, provider):
     ctx.addHook(retaddr, retaddr+1, MEM_EXECUTE, handler=finish_vswprintf_s_hook, label="")
     return HookRet.OP_DONE_INS
 
-_thunk_symaddr8 = -1
 def _vsnwprintf_hook(hook, ctx, addr, sz, op, provider):
-    ctx.setRegVal(DB_X86_R_RIP, _thunk_symaddr8)
+    ctx.setRegVal(DB_X86_R_RIP, ctx.active.globstate["_thunk_symaddr8"])
     buf = ctx.getRegVal(DB_X86_R_RCX)
     fmt = ctx.getRegVal(DB_X86_R_R8)
     fmts = ctx.getCWStr(fmt)
@@ -526,50 +512,40 @@ def _vsnwprintf_hook(hook, ctx, addr, sz, op, provider):
 
 def createThunkHooks(ctx):
     # have to be in higher scope for pickling the hooks
-    global _thunk_symaddr0
-    global _thunk_symaddr1
-    global _thunk_symaddr2
-    global _thunk_symaddr3
-    global _thunk_symaddr4
-    global _thunk_symaddr5
-    global _thunk_symaddr6
-    global _thunk_symaddr7
-    global _thunk_symaddr8
-
     name = "ExSystemTimeToLocalTime"
-    _thunk_symaddr0 = ctx.getImageSymbol(name, "ntoskrnl.exe")
+    ctx.active.globstate["_thunk_symaddr0"] = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, ExSystemTimeToLocalTime_hook, "ignore")
 
     name = "RtlTimeToTimeFields"
-    _thunk_symaddr1 = ctx.getImageSymbol(name, "ntoskrnl.exe")
+    ctx.active.globstate["_thunk_symaddr1"] = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, RtlTimeToTimeFields_hook, "ignore")
 
     name = "_stricmp"
-    _thunk_symaddr2 = ctx.getImageSymbol(name, "ntoskrnl.exe")
+    ctx.active.globstate["_thunk_symaddr2"] = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, _stricmp_hook, "ignore")
 
     name = "wcscat_s"
-    _thunk_symaddr3 = ctx.getImageSymbol(name, "ntoskrnl.exe")
+    ctx.active.globstate["_thunk_symaddr3"] = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, wcscat_s_hook, "ignore")
 
     name = "wcscpy_s"
-    _thunk_symaddr4 = ctx.getImageSymbol(name, "ntoskrnl.exe")
+    ctx.active.globstate["_thunk_symaddr4"] = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, wcscpy_s_hook, "ignore")
 
     name = "RtlInitUnicodeString"
-    _thunk_symaddr5 = ctx.getImageSymbol(name, "ntoskrnl.exe")
+    ctx.active.globstate["_thunk_symaddr5"] = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, RtlInitUnicodeString_hook, "ignore")
 
     name = "swprintf_s"
-    _thunk_symaddr6 = ctx.getImageSymbol(name, "ntoskrnl.exe")
+    ctx.active.globstate["_thunk_symaddr6"] = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, swprintf_s_hook, "ignore")
 
     name = "vswprintf_s"
-    _thunk_symaddr7 = ctx.getImageSymbol(name, "ntoskrnl.exe")
+    ctx.active.globstate["_thunk_symaddr7"] = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, vswprintf_s_hook, "ignore")
 
     name = "_vsnwprintf"
-    _thunk_symaddr8 = ctx.getImageSymbol(name, "ntoskrnl.exe")
+    ctx.active.globstate["_thunk_symaddr8"] = ctx.getImageSymbol(name, "ntoskrnl.exe")
     ctx.setApiHandler(name, _vsnwprintf_hook, "ignore")
 
 
@@ -605,6 +581,7 @@ def kuser_time_hook(hk, ctx, addr, sz, op, provider):
     # TODO adjust this?
     tc = int(it // 10000)
 
+    shared_data_addr = 0xfffff78000000000
     # write the values back
     bts = struct.pack("<QI", tc, tc>>32)
     ctx.setMemVal(shared_data_addr + 0x320, bts)
@@ -620,6 +597,11 @@ def kuser_time_hook(hk, ctx, addr, sz, op, provider):
     return HookRet.CONT_INS
 
 def initSys(ctx):
+    # setup global state we track
+    ctx.active.globstate["poolAllocations"] = [] # see ExAllocatePoolWithTag
+    ctx.active.globstate["handles"] = {} # number : (object,)
+    ctx.active.globstate["nexthandle"] = 1
+
     loadNtos(ctx)
     registerWinHooks(ctx)
 

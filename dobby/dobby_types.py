@@ -54,6 +54,7 @@ class Snapshot:
         self.bounds = copy.deepcopy(ctx.active.bounds)
         self.apihooks = copy.deepcopy(ctx.active.apihooks)
         self.stackann = copy.deepcopy(ctx.active.stackann)
+        self.globstate = copy.deepcopy(ctx.active.globstate)
 
         if ctx.isemu:
             self.hasemu = True
@@ -100,6 +101,7 @@ class Snapshot:
         ctx.active.bounds = copy.deepcopy(self.bounds)
         ctx.active.apihooks = copy.deepcopy(self.apihooks)
         ctx.active.stackann = copy.deepcopy(self.stackann)
+        ctx.active.globstate = copy.deepcopy(self.globstate)
 
         if ctx.isemu:
             if not self.hasemu:

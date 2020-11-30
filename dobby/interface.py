@@ -47,6 +47,9 @@ class DobbyProvider:
 
         self.stackann = None
 
+        # other global state that gets saved with the sate
+        self.globstate = {}
+
         # Dobby provider id stuff
         self.isEmuProvider = issubclass(type(self), DobbyEmu)
         self.isSymProvider = issubclass(type(self), DobbySym)

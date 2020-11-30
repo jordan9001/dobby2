@@ -905,13 +905,25 @@ class Dobby:
         
         return self.active.stopTrace()
 
-    def printTrace(self, prev=42):
-        t = self.getTrace()[-prev:]
-        for e in t:
+    def printTracePiece(self, trace, prev=42, end=-1, printind=False):
+        if end < 0:
+            end = len(trace) + end + 1
+
+        start = end - prev
+
+        for i in range(start,end):
+            if i < 0 or i >= len(trace):
+                continue
+            e = trace[i]
             out = hex(e[0])[2:]
             if len(e) >= 2:
                 out += ", " + e[1]
+            if printind:
+                out = f"{i:x} " + out
             print(out)
+
+    def printTrace(self, prev=42):
+        self.printTracePiece(self.getTrace(), prev, -1)
 
     def cmpTraceAddrs(self, t1, t2):
         # looks like trying to stop execution with ^C can make the trace skip?
@@ -926,7 +938,7 @@ class Dobby:
             t2i = t2[i]
             if (t1i[0] != t2i[0]):
                 differ = True
-                print(f"Traces diverge after {i} instructions ( @ {hex(t1[0])}, @ {hex(t2[0])})")
+                print(f"Traces diverge after {i:x} instructions ( @ {t1i[0]:x}, @ {t2i[0]:x})")
                 break
         if not differ:
             print("Traces match")
@@ -935,6 +947,9 @@ class Dobby:
         with open(filepath, "w") as fp:
             for te in trace:
                 fp.write(json.dumps(te) + '\n')
+
+    def saveCurrentTrace(self, filepath):
+        self.saveTrace(self.getTrace(), filepath)
 
     def loadTrace(self, filepath):
         trace = []
