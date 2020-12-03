@@ -1,11 +1,11 @@
 # Dobby2
 ---
 #### What is Dobby?
-Dobby is a hobby project I have created as a tool to help me reverse engineer a few highly obfuscated binaries.
+Dobby is a hobby project I have created to help me reverse engineer a few highly obfuscated binaries.
 
 Dobby is an emulator that provides interesting tools like a symbolic API, reverse taint analysis, multiple emulation engines, snapshots, and quick prototyping.
 
-The tool is built upon a set of "providers" that work as backends. Currently the two backends include (Triton)[https://github.com/JonathanSalwan/Triton] and (Unicorn)[https://github.com/unicorn-engine/unicorn]. Having multiple different engines with different strengths that share an environment and snapshots is a large strength.
+The tool is built upon a set of "providers" that work as backends. Currently the two backends include (Triton)[https://github.com/JonathanSalwan/Triton] and (Unicorn)[https://github.com/unicorn-engine/unicorn]. Having multiple different engines with different strengths that share an environment is a large strength.
 
 Other providers can be added simply by implementing the portions of an API that they can. (See interface.py)
 
