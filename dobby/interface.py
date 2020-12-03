@@ -139,6 +139,12 @@ class DobbyEmu:
     def stopTrace(self):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 
+    def isTracing(self):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function") 
+
+    def traceAPI(self, label):
+        raise NotImplementedError(f"{str(type(self))} does not implement this function") 
+
     def step(self, ignoreCurrentHook=True, printIns=True):
         raise NotImplementedError(f"{str(type(self))} does not implement this function") 
 

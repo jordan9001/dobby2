@@ -931,7 +931,7 @@ class Dobby:
     def printTrace(self, prev=42):
         self.printTracePiece(self.getTrace(), prev, -1)
 
-    def cmpTraceAddrs(self, t1, t2):
+    def cmpTraceAddrs(self, t1, t2, cmpdref=False):
         # looks like trying to stop execution with ^C can make the trace skip?
         if len(t1) != len(t2):
             print("Traces len differ ", len(t1), len(t2))
@@ -946,6 +946,10 @@ class Dobby:
                 differ = True
                 print(f"Traces diverge after {i:x} instructions ( @ {t1i[0]:x}, @ {t2i[0]:x})")
                 break
+            if cmpdref and len(t1i) >=3 and len(t2i) >=3:
+                if t1i[2] != t2i[2]:
+                    print(f"Traces's memory dereferences differ after {i:x} instructions @ {t1i[0]:x}")
+                    break
         if not differ:
             print("Traces match")
 
@@ -983,12 +987,9 @@ class Dobby:
 
         if handler is not None:
             # optionally leave entry in trace
-            if self.trace is not None and self.trace_api and (self.active.apihooks.start <= addr < self.active.apihooks.end):
-                dis = None
-                if self.trace_disass:
-                    dis = hk.label
-                item = (-1, dis)
-                self.trace.append(item)
+            if self.active.isTracing() and self.trace_api and (self.active.apihooks.start <= addr < self.active.apihooks.end):
+                dis = hk.label
+                self.active.traceAPI(dis)
 
             hret = handler(hk, self, addr, sz, op, self.active)
             

@@ -93,6 +93,12 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
         self.trace = None
         return t
 
+    def isTracing(self):
+        return self.trace is not None
+
+    def traceAPI(self, label):
+        self.trace.append((TRACE_API_ADDR, label))
+
     def step(self, ignorehook, printIns):
         self.printIns = printIns
         self.stepret = StepRet.OK

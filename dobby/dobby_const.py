@@ -34,3 +34,6 @@ MEM_READ = 1
 MEM_WRITE = 2
 MEM_EXECUTE = 4
 MEM_ALL = 7
+
+# Trace consts
+TRACE_API_ADDR = -1

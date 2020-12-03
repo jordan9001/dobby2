@@ -95,6 +95,12 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         self.trace = None
         return t
 
+    def isTracing(self):
+        return self.trace is not None
+
+    def traceAPI(self, label):
+        self.trace.append((TRACE_API_ADDR, label))
+
     def step(self, ignorehook, printIns):
         ins = self.getNextIns()
         if printIns:
