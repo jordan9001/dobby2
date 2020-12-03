@@ -1,0 +1,4 @@
+I haven't decided on a licence yet.
+If you want to use this project for personal use, that is fine. Use at your own risk.
+You shouldn't yet modify, redistribute, or use this code in a commercial produce.
+If you want to do any of that, contact me.
