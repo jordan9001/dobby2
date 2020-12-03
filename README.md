@@ -39,7 +39,7 @@ This project is similar to a few other projects. For most use cases, you probabl
  = | Dobby | Qiling | Speakeasy | PANDA | QEMU | Triton | Unicorn
 ---|-------|--------|-----------|-------|------|--------|---------
 Usability | MediumLow - hobby project | High - Well designed API on Unicorn | High - Well designed API on Unicorn especially for Windows Kernel | Highish - Extension of QEmu | Medium - Not designed as a library | Highish - Requires a bit of work for this use case (hence the creation of Dobby) | Very High - The Best API, but requires a bunch of work to set up environment (hence the creation of Qiling, Speakeasy, and Dobby)
-Symbolic Support | Yes | No | No | Some with LLVR IR | No | Yes | No
+Symbolic Support | Yes | No | No | Some with LLVM IR | No | Yes | No
 Snapshots | Yes | Yes | No? | Yes | Yes | No | No
 Multiple Backends | Yes | No | No | No | Yes | No | No
 Actively Maintained | Still in hobby phase | Yes | Yes | Yes | Yes | Yes | Yes
