@@ -199,11 +199,16 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
 
         if self.trace is not None:
             if len(self.trace) == 0 or self.trace[-1][0] != addr:
-                item = None
+                dis = None
+                dref = None
+                inssz = None
                 if self.ctx.trace_dref:
-                    item = (addr, None, [[],[]])
-                else:
-                    item = (addr, )
+                    dref = [[],[]]
+                #if self.ctx.trace_disass:
+                    #TODO
+                if self.ctx.trace_inssz:
+                    inssz = sz
+                item = (addr, dis, dref, inssz)
                 self.trace.append(item)
 
         #TODO this will go up too much because we get called to much, can we fix that?

@@ -44,6 +44,7 @@ class Dobby:
         self.trace_disass = True
         self.trace_dref = False
         self.trace_inssz = False
+        self.trace_api = True
 
         #TODO automatically register providers here?
 
@@ -981,6 +982,14 @@ class Dobby:
             raise TypeError(f"Unknown op to handler hook \"{op}\"")
 
         if handler is not None:
+            # optionally leave entry in trace
+            if self.trace is not None and self.trace_api and (self.active.apihooks.start <= addr < self.active.apihooks.end):
+                dis = None
+                if self.trace_disass:
+                    dis = hk.label
+                item = (-1, dis)
+                self.trace.append(item)
+
             hret = handler(hk, self, addr, sz, op, self.active)
             
             if hret == HookRet.FORCE_STOP_INS:
