@@ -5,7 +5,7 @@ Dobby is a hobby project I have created to help me reverse engineer a few highly
 
 Dobby is an emulator that provides interesting tools like a symbolic API, reverse taint analysis, multiple emulation engines, snapshots, and quick prototyping.
 
-The tool is built upon a set of "providers" that work as backends. Currently the two providers include (Triton)[https://github.com/JonathanSalwan/Triton] and (Unicorn)[https://github.com/unicorn-engine/unicorn]. (See dobby_unicorn.py and dobby_triton.py) Having multiple different engines with different strengths share an environment is a big advantage.
+The tool is built upon a set of "providers" that work as backends. Currently the two providers include [Triton](https://github.com/JonathanSalwan/Triton) and [Unicorn](https://github.com/unicorn-engine/unicorn). (See dobby_unicorn.py and dobby_triton.py) Having multiple different engines with different strengths share an environment is a big advantage.
 
 Other providers can be added simply by implementing the portions of an API that they can. (See interface.py)
 
@@ -49,17 +49,17 @@ Cool Name | No | Yes | Yes | No | Very No | Yes | Yes
 Stems from QEMU | Yes | Yes | Yes | Yes | Is | No? | Yes
 Publications | No | Yes | Yes | Yes | Yes | Yes | Yes
 
-(Qiling Framework)[https://github.com/qilingframework/qiling]
+[Qiling Framework](https://github.com/qilingframework/qiling)
 
-(Fireeye's Speakeasy)[https://github.com/fireeye/speakeasy]
+[Fireeye's Speakeasy](https://github.com/fireeye/speakeasy)
 
-(Panda)[https://github.com/panda-re/panda]
+[Panda](https://github.com/panda-re/panda)
 
-(QEMU (the OG))[https://www.qemu.org/]
+[QEMU](https://www.qemu.org/)
 
-(Triton)[https://github.com/JonathanSalwan/Triton]
+[Triton](https://github.com/JonathanSalwan/Triton)
 
-(Unicorn)[https://github.com/unicorn-engine/unicorn]
+[Unicorn](https://github.com/unicorn-engine/unicorn)
 
 ## Example
 See the file beepexample.py
