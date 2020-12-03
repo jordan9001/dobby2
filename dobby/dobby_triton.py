@@ -43,7 +43,6 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
 
         self.inscount = 0
         self.trace = None
-        self.tracefull = False
         self.defsyms = set()
         self.lastins = None
 
@@ -83,11 +82,10 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
     def removeInstructionHook(self, insname, handler):
         pass
 
-    def startTrace(self, getdrefs=False):
+    def startTrace(self):
         if self.trace is not None:
             raise ValueError("Tried to start trace when there is already a trace being collected")
         self.trace = []
-        getdrefs = getdrefs
 
     def getTrace(self):
         return self.trace
@@ -260,11 +258,17 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         insaddr = ins.getAddress()
         if self.trace is not None:
             if len(self.trace) == 0 or self.trace[-1][0] != insaddr:
-                item = None
-                if self.tracefull:
-                    item = (insaddr, ins.getDisassembly(), [[],[]])
-                else:
-                    item = (insaddr, ins.getDisassembly())
+                dis = None
+                drefs = None
+                inssz = None
+                if self.ctx.trace_disass:
+                    dis = ins.getDisassembly()
+                if self.ctx.trace_dref:
+                    drefs = [[],[]]
+                if self.ctx.trace_inssz:
+                    inssz = ins.getSize()
+
+                item = (insaddr, dis, drefs, inssz)
                 self.trace.append(item)
 
         # every X thousand instructions, check for inf looping ?
@@ -317,7 +321,7 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
 
         self.callbackson = False
 
-        if self.trace is not None and self.tracefull:
+        if self.trace is not None and self.ctx.trace_dref:
             self.trace[-1][2][0] += self.addrsread
             self.trace[-1][2][1] += self.addrswritten
 

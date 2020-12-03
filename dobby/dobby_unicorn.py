@@ -16,7 +16,6 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
         self.emu = Uc(UC_ARCH_X86, UC_MODE_64)
         self.ctx.unicorn = self
         self.trace = None
-        self.tracefull = False
         self.inscount = 0
         self.stepret = StepRet.OK
         self.intrnum = -1
@@ -81,11 +80,10 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
     def removeInstructionHook(self, insname, handler):
         pass
 
-    def startTrace(self, getdrefs=False):
+    def startTrace(self):
         if self.trace is not None:
             raise ValueError("Tried to start trace when there is already a trace being collected")
         self.trace = []
-        self.tracefull = getdrefs
 
     def getTrace(self):
         return self.trace
@@ -202,7 +200,7 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
         if self.trace is not None:
             if len(self.trace) == 0 or self.trace[-1][0] != addr:
                 item = None
-                if self.tracefull:
+                if self.ctx.trace_dref:
                     item = (addr, None, [[],[]])
                 else:
                     item = (addr, )
@@ -219,7 +217,7 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
             print("In memory hook when we wanted to stop!")
             emu.emu_stop()
 
-        if not self.trystop and self.tracefull and self.trace is not None:
+        if not self.trystop and self.ctx.trace_dref and self.trace is not None:
             if access == UC_MEM_WRITE:
                 self.trace[-1][2][1].append((addr, sz))
             else:

@@ -40,6 +40,11 @@ class Dobby:
         self.name2reg = x86name2reg
         self.reg2name = x86reg2name
 
+        # trace format (addr, disass, [[addrsread],[addrswritten]], inssz)
+        self.trace_disass = True
+        self.trace_dref = False
+        self.trace_inssz = False
+
         #TODO automatically register providers here?
 
     def registerProvider(self, provider, name, activate):
@@ -887,11 +892,11 @@ class Dobby:
 
         return True
 
-    def startTrace(self, getaddrs=False):
+    def startTrace(self):
         if not self.isemu:
             raise RuntimeError("No emulation providers are active")
 
-        return self.active.startTrace(getaddrs)
+        return self.active.startTrace()
 
     def getTrace(self):
         if not self.isemu:
