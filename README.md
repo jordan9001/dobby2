@@ -46,7 +46,7 @@ Actively Maintained | Still in hobby phase | Yes | Yes | Yes | Yes | Yes | Yes
 Licence | ? | GPLv2 | MIT | GPLv2 | GPLv2 | Apache2 | GPLv2
 Fun to use | Yes | Yes | Yes | Yesish | Kinda | Yes | Very Yes
 Cool Name | No | Yes | Yes | No | Very No | Yes | Yes
-Stems from QEMU | Yes | Yes | Yes | Yes | Is | No | Yes
+Stems from QEMU | Yes | Yes | Yes | Yes | Is | No? | Yes
 Publications | No | Yes | Yes | Yes | Yes | Yes | Yes
 
 (Qiling Framework)[https://github.com/qilingframework/qiling]
