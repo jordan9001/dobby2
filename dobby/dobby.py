@@ -284,9 +284,13 @@ class Dobby:
             mem.append(c)
         return bytes(mem)
 
-    def getCWStr(self, addr):
+    def getCWStr(self, addr, count=None):
         mem = bytearray()
         while True:
+            if count is not None:
+                if count <= 0:
+                    break
+                count -= 1
             if not self.inBounds(addr, 2, MEM_READ):
                 raise MemoryError("Tried to read a CWStr out of bounds")
             c = self.getMemVal(addr, 2)
@@ -687,8 +691,11 @@ class Dobby:
 
         found = [x for x in self.active.hooks[0] if x.isApiHook and x.label.endswith("::"+name) and 0 != (x.htype & MEM_EXECUTE)]
 
+        if overwrite=="ignore" and len(found) == 0:
+            # no need
+            return
         if len(found) != 1:
-            raise KeyError(f"Found {len(found)} hooks that match that name, unable to set handler")
+            raise KeyError(f"Found {len(found)} api hooks that match the name {name}, unable to set handler")
 
         hk = found[0]
 

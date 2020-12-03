@@ -285,6 +285,21 @@ def IoCreateFileEx_hook(hook, ctx, addr, sz, op, provider):
 
     return HookRet.STOP_INS
 
+def IoCreateDevice_hook(hook, ctx, addr, sz, op, provider):
+    drvobj = ctx.getRegVal(DB_X86_R_RCX)
+    easz = ctx.getRegVal(DB_X86_R_RDX)
+    dname = ctx.getRegVal(DB_X86_R_R8)
+    dtype = ctx.getRegVal(DB_X86_R_R9)
+    sp = ctx.getRegVal(DB_X86_R_RSP)
+    char = ctx.getu32(sp + 0x28 + (0 * 8))
+    exclusive = ctx.getu64(sp + 0x28 + (1 * 8))
+    outdev = ctx.getu64(sp + 0x28 + (2 * 8))
+
+    name = readUnicodeStr(ctx, dname)
+    print(f"Driver is trying to create device {name}")
+
+    return HookRet.FORCE_STOP_INS
+
 def ZwClose_hook(hook, ctx, addr, sz, op, provider):
     h = ctx.getRegVal(DB_X86_R_RCX)
     name = ctx.active.globstate["handles"][h][1]
@@ -562,6 +577,7 @@ def registerWinHooks(ctx):
     ctx.setApiHandler("ZwFlushBuffersFile", ZwFlushBuffersFile_hook, "ignore")
     ctx.setApiHandler("KeAreAllApcsDisabled", KeAreAllApcsDisabled_hook, "ignore")
     ctx.setApiHandler("KeIpiGenericCall", KeIpiGenericCall_hook, "ignore")
+    ctx.setApiHandler("IoCreateDevice", IoCreateDevice_hook, "ignore")
 
     createThunkHooks(ctx)
 

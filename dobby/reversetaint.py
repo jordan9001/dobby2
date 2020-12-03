@@ -61,6 +61,9 @@ def revtainttrace(ctx, trace, intaintedaddrs, intaintedregs, outputtrace=None, p
     #DEBUG
     ignorereg = []
     for r in arch.registers:
+        # cc is too broad of a register, taints too much
+        # sp is also misused by VEX in some of the instructions?
+        # so this isn't 100% accurate, but still gives me some good answers
         if r.startswith("cc_") or r.endswith("sp"):
             roff, rsz = arch.registers[r]
             for i in range(rsz):
