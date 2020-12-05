@@ -48,6 +48,7 @@ class Snapshot:
         self.priv = ctx.active.priv
         #TODO self.modules = copy.deepcopy(ctx.active.modules)
         self.nextalloc = ctx.active.nextalloc
+        self.pagetablebase = ctx.active.pagetablebase
         self.hooks = copy.deepcopy(ctx.active.hooks)
         self.inshooks = copy.deepcopy(ctx.active.inshooks)
         self.ann = copy.deepcopy(ctx.active.ann)
@@ -95,6 +96,7 @@ class Snapshot:
         ctx.active.priv = self.priv
         #TODO ctx.active.modules = copy.deepcopy(self.modules)
         ctx.active.nextalloc = self.nextalloc
+        ctx.active.pagetablebase = self.pagetablebase
         ctx.active.hooks = copy.deepcopy(self.hooks)
         ctx.active.inshooks = copy.deepcopy(self.inshooks)
         ctx.active.ann = copy.deepcopy(self.ann)

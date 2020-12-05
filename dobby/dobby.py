@@ -724,14 +724,20 @@ class Dobby:
         startcountshft = startshft
         endshft = (end + (self.pgsz-1)) >> self.pgshft
         while startshft < endshft:
-            if startshft not in self.active.bounds:
-                self.active.bounds[startshft] = permissions
-            else:
+            doupdate = True
+            if startshft in self.active.bounds:
                 existingperm = self.active.bounds[startshft]
-                if not overrule and permissions != existingperm:
+                if permissions == existingperm:
+                    if startcountshft == startshft:
+                        startcountshft += 1
+                    doupdate = False
+                elif not overrule:
                     raise MemoryError(f"Tried to update bounds with permissions {permissions} when they were already {self.active.bounds[start]}")
-                elif permissions == existingperm and startcountshft == startshft:
-                    startcountshft += 1
+
+            if doupdate:
+                self.active.bounds[startshft] = permissions
+                #TODO update page table
+
             startshft += 1
 
         # call the providers
@@ -739,6 +745,14 @@ class Dobby:
             rndstart = startcountshft << self.pgshft
             rndend = endshft << self.pgshft
             self.active.updateBounds(rndstart, rndend, permissions)
+
+    def createPageTables(self):
+        # for now see if we can get away with a 1-to-1 mapping physical to virtual
+
+        #TODO setup page table
+        #TODO update according to the existing bounds
+
+        self.setRegVal(DB_X86_R_CR3, self.active.pagetablebase)
 
     def inBounds(self, addr, sz, access):
         start = addr >> self.pgshft
@@ -874,14 +888,13 @@ class Dobby:
         cr0val |= 0 << 18 # Alignment Mask
         cr0val |= 0 << 29 # Not Write-through
         cr0val |= 0 << 30 # Cache Disable
-        if self.active.providerName == "Triton":
-            cr0val |= 1 << 31 # Paging Enabled
-        else:
-            # we can't get away with this without actually supporting this in things like unicorn
-            #TODO
-            cr0val |= 0 << 31 # Paging Enabled
+        cr0val |= 1 << 31 # Paging Enabled
 
         self.setRegVal(DB_X86_R_CR0, cr0val)
+
+        # set up cr3 and paging
+        self.createPageTables()
+
         #TODO set cr4 as well
 
         # create stack

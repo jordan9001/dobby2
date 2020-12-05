@@ -349,6 +349,7 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
         self.emu.mem_write(addr, bytes(val))
 
     def updateBounds(self, start, end, permissions):
+        #TODO update page table
         try:
             self.emu.mem_map(start, end - start, permissions)
         except UcError as e:

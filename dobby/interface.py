@@ -40,6 +40,7 @@ class DobbyProvider:
         # setup bounds
         # bounds is for sandboxing areas we haven't setup yet and tracking permissions
         self.bounds = {}
+        self.pagetablebase = 0xffff800000000000
 
         # add annotation for the API_FUNC area
         self.apihooks = Annotation(apihookarea, apihookarea, "API_HOOKS", "API HOOKS")
