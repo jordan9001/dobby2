@@ -846,10 +846,11 @@ class Dobby:
 
         return start
 
-    def initState(self, start, end, stackbase=0, priv=0):
+    def initState(self, start, end, stackbase=0, ring=0):
         #TODO be able to initalize/track multiple contexts
         #TODO work in emu mode
-        self.active.priv = (priv == 0)
+
+        self.active.priv = (ring == 0)
         if stackbase == 0:
             stackbase = 0xffffb98760000000 if self.active.priv else 0x64f000
 
@@ -857,7 +858,7 @@ class Dobby:
         for r in self.getAllReg():
             n = self.getRegName(r)
             sym = False
-            if n in ["cr8", "cr0"]:
+            if n in ["cr8", "cr0", "cr3", "cr4"]:
                 sym=False
             elif n.startswith("cr") or n in ["gs", "fs"]:
                 sym = True
@@ -870,7 +871,7 @@ class Dobby:
         self.setRegVal(
             DB_X86_R_EFLAGS,
             (1 << 9) | # interrupts enabled
-            (priv << 12) | # IOPL
+            (ring << 12) | # IOPL
             (1 << 21) # support cpuid
         )
 
@@ -892,10 +893,35 @@ class Dobby:
 
         self.setRegVal(DB_X86_R_CR0, cr0val)
 
+        # set cr4
+        cr4val = 0
+        cr4val |= 0 << 0    # VME
+        cr4val |= 0 << 1    # PVI
+        cr4val |= 0 << 2    # TSD
+        cr4val |= 0 << 3    # DE
+        cr4val |= 0 << 4    # PSE
+        cr4val |= 1 << 5    # PAE
+        cr4val |= 0 << 6    # MCE
+        cr4val |= 1 << 7    # PGE
+        cr4val |= 1 << 8    # PCE
+        cr4val |= 1 << 9    # OSFXSR
+        cr4val |= 0 << 10   # OSXMMEXCPT
+        cr4val |= 1 << 11   # UMIP
+        cr4val |= 1 << 12   # LA57
+        cr4val |= 0 << 13   # VMXE
+        cr4val |= 0 << 14   # SMXE
+        cr4val |= 1 << 17   # PCIDE
+        cr4val |= 0 << 18   # OSXSAVE
+        cr4val |= 1 << 20   # SMEP
+        cr4val |= 1 << 21   # SMAP
+        cr4val |= 0 << 22   # PKE
+        cr4val |= 0 << 23   # CET (gross)
+        cr4val |= 0 << 24   # PKS
+
+        self.setRegVal(DB_X86_R_CR4, cr4val)
+
         # set up cr3 and paging
         self.createPageTables()
-
-        #TODO set cr4 as well
 
         # create stack
         if self.active.stackann is None:

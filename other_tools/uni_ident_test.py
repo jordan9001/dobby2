@@ -5,15 +5,35 @@ import struct
 
 uc = Uc(UC_ARCH_X86, UC_MODE_64)
 
+def insHook(emu, addr, sz, user_data):
+    print(f"HOOK: Code @ {addr:x} ({sz:x})")
+
+def rwHook(emu, access, addr, sz, val, user_data):
+    print(f"HOOK: mem {access} @ {addr:x} ({sz:x})")
+
+def invalMemHook(emu, access, addr, sz, val, user_data):
+    print(f"HOOK: invalid mem {access} @ {addr:x} ({sz:x})")
+    return False
+
+def invalInsHook(emu, user_data):
+    print(f"HOOK: invalid instruction")
+    return False
+
+def intrHook(emu, intno, user_data):
+    print(f"HOOK: interrupt {intno:x}")
+
+uc.hook_add(UC_HOOK_CODE, insHook, None, 0, 0xffffffffffffffff)
+uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, rwHook, None)
+uc.hook_add(UC_HOOK_MEM_INVALID, invalMemHook, None)
+uc.hook_add(UC_HOOK_INSN_INVALID, invalInsHook, None)
+uc.hook_add(UC_HOOK_INTR, intrHook, None)
 # set up page table for ident mapping
 
-tableaddr = 0x0000800000000000
+tableaddr = 0x00008f0000000000
 nexttable = tableaddr
 pgshft = 12
-pgmask = (~((1 << pgshft) - 1)) & 0xffffffffffffffff
+entryaddrmask = 0x0000fffffffff000
 
-# technically this isn't good because there is a 52 bit limit on physical addrs and 63:M need to be 0
-# but let's see if Unicorn lets us do it?
 uc.reg_write(UC_X86_REG_CR3, tableaddr)
 uc.mem_map(tableaddr, 1 << pgshft, UC_PROT_READ)
 nexttable += 1 << pgshft
@@ -106,7 +126,7 @@ def walkentry(eaddr, sp, prot, isend=False, doalloc=True):
         if echg:
             uc.mem_write(eaddr, struct.pack("<Q", entry))
 
-        return (entry & pgmask)
+        return (entry & entryaddrmask)
 
 def mapmem(start, size, prot):
 
@@ -131,6 +151,25 @@ def mapmem(start, size, prot):
 
         sp += 1
 
+def printpagetable(tab, depth=0):
+    if depth == 0:
+        print(f"pml4 table @ {tab:x}")
+
+    depth += 1
+
+    t = uc.mem_read(tab, 0x1000)
+    for i in range(0, 0x1000, 8):
+        e = struct.unpack("<Q", t[i:i+8])[0]
+        if e & 0x1:
+            print(f"{'    ' * depth}{tab+i:016x} [{i//8:x}]: {e:016x}")
+            addr = e & entryaddrmask
+            if depth < 4:
+                addr = e & entryaddrmask
+                printpagetable(addr, depth)
+            else:
+                addr = phys2virt(addr)
+                print(f"{'    ' * (depth+1)}= {addr:016x}")
+
 #map page table in page table?
 #TODO
 
@@ -142,7 +181,27 @@ def mapmem(start, size, prot):
 
 mapmem(0x111000, 0x3000, UC_PROT_ALL)
 
-mapmem(0xffffffff00000000, 0x3000, UC_PROT_READ)
+mapmem(0xffffffff00000000, 0x1000, UC_PROT_READ)
 mapmem(0xffffffff00001000, 0x1000, UC_PROT_READ | UC_PROT_WRITE)
 mapmem(0xffffffff00002000, 0x1000, UC_PROT_READ | UC_PROT_EXEC)
 
+# print unicorn's map of physical memory
+reg_i = uc.mem_regions()
+for r_beg, r_end, r_prot in reg_i:
+    print(f"{r_beg:x} - {r_end:x} ({r_prot:x})")
+
+# print the page table
+printpagetable(tableaddr)
+
+#code = bytes.fromhex("48b800000000ffffffff488b00ebfe")
+code = bytes.fromhex("ebfe")
+
+#addr = 0x111000
+addr = 0xffffffff00002000
+
+uc.mem_write(virt2phys(addr), code)
+
+uc.reg_write(UC_X86_REG_RIP, addr)
+
+uc.emu_start(virt2phys(addr), 0, 0, 12)
+print("okay")
