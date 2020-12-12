@@ -201,7 +201,13 @@ addr = 0xffffffff00002000
 
 uc.mem_write(virt2phys(addr), code)
 
-uc.reg_write(UC_X86_REG_RIP, addr)
+input("...")
 
-uc.emu_start(virt2phys(addr), 0, 0, 12)
+uc.emu_start(addr, 0, 0, 12)
+# After some tracing through unicorn, I think this is a bug in unicorn.
+# Their mappings are physical addresses, but they set you rip based on what you send as the beginning
+# Still have to dig deeper on why it is having problems
+# will have to think about how I want to fix this
+# for my use case I don't actually need page tables for now
+# But I do need to be able to lie about cr0
 print("okay")

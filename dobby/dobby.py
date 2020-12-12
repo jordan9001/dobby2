@@ -736,7 +736,7 @@ class Dobby:
 
             if doupdate:
                 self.active.bounds[startshft] = permissions
-                #TODO update page table
+                # here we could update a page table, if we did there
 
             startshft += 1
 
@@ -747,12 +747,7 @@ class Dobby:
             self.active.updateBounds(rndstart, rndend, permissions)
 
     def createPageTables(self):
-        # for now see if we can get away with a 1-to-1 mapping physical to virtual
-
-        #TODO setup page table
-        #TODO update according to the existing bounds
-
-        self.setRegVal(DB_X86_R_CR3, self.active.pagetablebase)
+        raise NotImplementedError("Our current providers don't work well with page tables")
 
     def inBounds(self, addr, sz, access):
         start = addr >> self.pgshft
@@ -889,7 +884,14 @@ class Dobby:
         cr0val |= 0 << 18 # Alignment Mask
         cr0val |= 0 << 29 # Not Write-through
         cr0val |= 0 << 30 # Cache Disable
-        cr0val |= 1 << 31 # Paging Enabled
+        if self.active.getName() == 'unicorn':
+            # unicorn does not work well for how we want
+            # even if we generate good page tables
+            # so we just have to not enable it
+            # and use snapshotting back and forth to get past CR0 detection
+            cr0val |= 0 << 31 # Paging Enabled
+        else:
+            cr0val |= 1 << 31 # Paging Enabled
 
         self.setRegVal(DB_X86_R_CR0, cr0val)
 
@@ -921,7 +923,8 @@ class Dobby:
         self.setRegVal(DB_X86_R_CR4, cr4val)
 
         # set up cr3 and paging
-        self.createPageTables()
+        #TODO
+        #self.createPageTables()
 
         # create stack
         if self.active.stackann is None:
