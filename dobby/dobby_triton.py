@@ -34,8 +34,14 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
         self.addrswritten = []
         self.addrsread = []
         self.callbackson = False
-        self.api.addCallback(CALLBACK.GET_CONCRETE_MEMORY_VALUE, self.getMemCallback)
-        self.api.addCallback(CALLBACK.SET_CONCRETE_MEMORY_VALUE, self.setMemCallback)
+        try:
+            self.api.addCallback(CALLBACK.GET_CONCRETE_MEMORY_VALUE, self.getMemCallback)
+            self.api.addCallback(CALLBACK.SET_CONCRETE_MEMORY_VALUE, self.setMemCallback)
+        except TypeError:
+            # older verisons of Triton wanted it flipped?
+            self.api.addCallback(self.getMemCallback, CALLBACK.GET_CONCRETE_MEMORY_VALUE)
+            self.api.addCallback(self.setMemCallback, CALLBACK.SET_CONCRETE_MEMORY_VALUE)
+
 
         # save off types for checking later
         self.type_MemoryAccess = type(MemoryAccess(0,1))

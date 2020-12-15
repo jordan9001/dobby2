@@ -177,8 +177,11 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
             print('@', hex(addr))
 
         if self.trystop:
-            print("In instruction hook when we wanted to stop!")
+            # insHook just happens on the instruction that doesn't happen sometimes
+            #TODO check to make sure this doesn't happen twice in a row?
+            #print("In instruction hook when we wanted to stop!")
             emu.emu_stop()
+            return
 
         # this hook could happen even if we are not about to execute this instruction
         # it happens before we are stopped

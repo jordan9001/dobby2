@@ -137,22 +137,10 @@ def setIRQL(ctx, newlevel):
     ctx.setRegVal(DB_X86_R_CR8, newlevel)
     return oldirql
 
-#TODO more helper stuff
-
-#TODO add windows kernel api hooks here
-# this file can be reimported as we continue to fill it out
-
-# API to emulate first
-# with this you can probably figue out the original target...
-"""
-BCryptDestroyHash
-BCryptCloseAlgorithmProvider
-__C_specific_handler
-ZwReadFile
-KeInitializeApc
-KeInsertQueueApc
-KeBugCheckEx
-"""
+def KeBugCheckEx_hook(hook, ctx, addr, sz, op, provider):
+    code = ctx.getRegVal(DB_X86_R_RCX)
+    print(f"Bug Check! Code: {code:x}. See other 4 params for more info")
+    return HookRet.FORCE_STOP_INS
 
 def ExAllocatePoolWithTag_hook(hook, ctx, addr, sz, op, provider):
     #TODO actually have an allocator? Hope they don't do this a lot
@@ -349,7 +337,7 @@ def ZwReadFile_hook(hook, ctx, addr, sz, op, provider):
     if poff:
         offval = ctx.getu64(poff)
         print(f"Read is at offset {hex(offval)}")
-    
+
     ctx.doRet(0)
     return HookRet.FORCE_STOP_INS
 
@@ -569,11 +557,13 @@ def setNtosThunkHook(ctx, name, dostop):
 
 def registerWinHooks(ctx):
     ctx.setApiHandler("RtlDuplicateUnicodeString", RtlDuplicateUnicodeString_hook, "ignore")
+    ctx.setApiHandler("KeBugCheckEx", KeBugCheckEx_hook, "ignore")
     ctx.setApiHandler("ExAllocatePoolWithTag", ExAllocatePoolWithTag_hook, "ignore")
     ctx.setApiHandler("ExFreePoolWithTag", ExFreePoolWithTag_hook, "ignore")
     ctx.setApiHandler("IoCreateFileEx", IoCreateFileEx_hook, "ignore")
     ctx.setApiHandler("ZwClose", ZwClose_hook, "ignore")
     ctx.setApiHandler("ZwWriteFile", ZwWriteFile_hook, "ignore")
+    ctx.setApiHandler("ZwReadFile", ZwReadFile_hook, "ignore")
     ctx.setApiHandler("ZwFlushBuffersFile", ZwFlushBuffersFile_hook, "ignore")
     ctx.setApiHandler("KeAreAllApcsDisabled", KeAreAllApcsDisabled_hook, "ignore")
     ctx.setApiHandler("KeIpiGenericCall", KeIpiGenericCall_hook, "ignore")
