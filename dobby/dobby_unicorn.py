@@ -369,5 +369,5 @@ class DobbyUnicorn(DobbyProvider, DobbyEmu, DobbyRegContext, DobbyMem, DobbySnap
     def takeSnapshot(self, snapshot):
         pass
 
-    def restoreSnapshot(self, snapshot):
+    def restoreSnapshot(self, snapshot, trackDiff=False):
         pass

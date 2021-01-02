@@ -57,6 +57,7 @@ class DobbyProvider:
         self.isRegContextProvider = issubclass(type(self), DobbyRegContext)
         self.isMemoryProvider = issubclass(type(self), DobbyMem)
         self.isSnapshotProvider = issubclass(type(self), DobbySnapshot)
+        self.isFuzzerProvider = issubclass(type(self), DobbyFuzzer)
 
         ctx.registerProvider(self, name, True)
 
@@ -251,9 +252,28 @@ class DobbySnapshot:
         """
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
 
-    def restoreSnapshot(self, snapshot):
+    def restoreSnapshot(self, snapshot, trackDiff=False):
         """
         A chance to restore things that the normal snapshot state
         does not know about for this provider
         """
         raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
+class DobbyFuzzer:
+    """
+    Utilities needed by the fuzzing tooling
+    """
+
+    def getRunCoverage(self):
+        """
+        Gets coverage information for current run as a unique value/hash
+        """
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
+    def resetCoverage(self):
+        """
+        Resets coverage info, starting a new coverage run
+        """
+        raise NotImplementedError(f"{str(type(self))} does not implement this function")
+
+

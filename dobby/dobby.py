@@ -72,6 +72,7 @@ class Dobby:
         self.isreg = provider.isRegContextProvider
         self.ismem = provider.isMemoryProvider
         self.issnp = provider.isSnapshotProvider
+        self.isfuz = provider.isFuzzerProvider
 
         self.active.activated()
 
@@ -1117,7 +1118,7 @@ class Dobby:
 
         self.snapshots[name] = snap
 
-    def restoreSnap(self, name):
+    def restoreSnap(self, name, trackDiff=False):
         if not self.issnp:
             raise RuntimeError("No emulation providers are active")
 
@@ -1128,7 +1129,7 @@ class Dobby:
 
         snap.restore(self)
 
-        self.active.restoreSnapshot(snap)
+        self.active.restoreSnapshot(snap, trackDiff)
 
     def removeSnap(self, name):
         if name not in self.snapshots:

@@ -680,5 +680,5 @@ class DobbyTriton(DobbyProvider, DobbyEmu, DobbySym, DobbyRegContext, DobbyMem, 
     def takeSnapshot(self, snapshot):
         pass
 
-    def restoreSnapshot(self, snapshot):
+    def restoreSnapshot(self, snapshot, trackDiff=False):
         pass
