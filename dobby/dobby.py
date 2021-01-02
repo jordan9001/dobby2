@@ -1020,7 +1020,17 @@ class Dobby:
                     break
                 trace.append(json.loads(l))
         return trace
-    
+
+    def getApiTraceIndex(self, trace, apiname):
+        out = []
+        for i in range(len(trace)):
+            if trace[i][0] != TRACE_API_ADDR:
+                continue
+            dis = trace[i][1]
+            if dis.endswith(apiname):
+                out.append(i)
+        return out
+
     #TODO move to EMU interface?
     def handle_hook(self, hk, addr, sz, op, ignorehook):
         self.active.lasthook = hk
@@ -1042,7 +1052,7 @@ class Dobby:
                 self.active.traceAPI(dis)
 
             hret = handler(hk, self, addr, sz, op, self.active)
-            
+
             if hret == HookRet.FORCE_STOP_INS:
                 return (True, stopret)
             elif hret == HookRet.OP_CONT_INS:

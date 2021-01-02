@@ -1,5 +1,6 @@
 import pyvex
 import archinfo
+from .dobby_const import *
 
 def getRegInOut(ctx, address, inslen=15, arch=None, oneins=True, ignorereg=[]):
     b = ctx.getMemVal(address, inslen)
@@ -58,7 +59,6 @@ def revtainttrace(ctx, trace, intaintedaddrs, intaintedregs, outputtrace=None, p
         for i in range(sz):
             taintedaddrs.append(addr+i)
 
-    #DEBUG
     ignorereg = []
     for r in arch.registers:
         # cc is too broad of a register, taints too much
@@ -69,18 +69,25 @@ def revtainttrace(ctx, trace, intaintedaddrs, intaintedregs, outputtrace=None, p
             for i in range(rsz):
                 ignorereg.append(roff+i)
 
+    raxreg = arch.registers['rax']
     taintedins = 1
 
     for i in range(len(trace)-1, -1, -1):
         if not printinfo and (i & 0xfff == 0):
             print(f"{i:x}\t{taintedins/len(trace):.2%} tainted\tTaintedRegs: {strVexRegSet(arch, taintedregs)}, num adders = {len(taintedaddrs)}")
         te = trace[i]
-        if te[0] == -1:
+        if te[0] == TRACE_API_ADDR:
             # Got an api area!
             # if rax is tainted, we issue a stop here
             # if any volatile register is tainted, issue a stop here
-            #TODO
-            continue
+            for raxi in range(raxreg[0], raxreg[0]+raxreg[1]):
+                if raxi in taintedregs:
+                    taintedregs.remove(raxi)
+                    print(f"\n\nDepends on ret from API {te[1]}\n\n")
+                    # stop?
+                
+
+            #TODO check if the api has in/out addresses recorded too
         if len(te) < 3:
             raise ValueError("Need drefs in trace for reverse taint analysis")
         l = 15 if len(te) < 4 else te[3]
