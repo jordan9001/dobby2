@@ -1,5 +1,6 @@
 __pycache__/
 target*
+*.dat
 *.bin
 *.sys
 *.i64
@@ -13,3 +14,4 @@ target*
 *.trace
 *.bndb*
 *.snap
+tracecmp.py

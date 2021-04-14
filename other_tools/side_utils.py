@@ -88,8 +88,9 @@ def gen_commented_memdmp(dtstr, dbstr):
 
 
 import ctypes
+import struct
 
-def QuerySysInfo(infoclass=0x4d)
+def QuerySysInfo(infoclass=0x4d):
     retsz = ctypes.c_ulong(0)
     retszptr = ctypes.pointer(retsz)
     ctypes.windll.ntdll.NtQuerySystemInformation(infoclass, 0, 0, retszptr)
@@ -105,14 +106,14 @@ def quickhex(chunk):
 
 def parseModInfoEx(infobuf):
     #TODO
-	fmt = "<HHIQQQIIHHHH256sIIQ"
+    fmt = "<HHIQQQIIHHHH256sIIQ"
     off = 0
     modinfo = []
     while True:
-        nextoff = struct.unpack("<H", mia[off:off+2])[0]
+        nextoff = struct.unpack("<H", infobuf[off:off+2])[0]
         if nextoff == 0:
             break
-        vals = struct.unpack(fmt, mia[off:off+struct.calcsize(fmt)])
+        vals = struct.unpack(fmt, infobuf[off:off+struct.calcsize(fmt)])
         (
             nextoff,
             pad, pad,
@@ -150,4 +151,4 @@ def parseModInfoEx(infobuf):
             "DefaultBase": defbase,
         })
         off += nextoff
-	return modinfo
+    return modinfo
